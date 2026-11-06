@@ -10,7 +10,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК ПОЛНОЙ ВЕРСИИ БОТА ===", flush=True)
+print("=== ЗАПУСК ФИНАЛЬНОЙ ВЕРСИИ БОТА ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
@@ -130,7 +130,7 @@ def get_gigachat_token():
     }
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
-        print(f"DEBUG GIGACHAT AUTH: {response.status_code} - {response.text}", flush=True)
+        print(f"DEBUG GIGACHAT AUTH: {response.status_code}", flush=True)
         return response.json().get('access_token')
     except Exception as e:
         print(f"Ошибка сети GigaChat: {e}", flush=True)
@@ -160,7 +160,7 @@ def ask_gigachat(prompt, context="", mode="explain"):
 
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
-        print(f"DEBUG GIGACHAT API: {response.status_code} - {response.text[:150]}", flush=True)
+        print(f"DEBUG GIGACHAT API: {response.status_code}", flush=True)
         return response.json()['choices'][0]['message']['content']
     except Exception as e:
         print(f"Ошибка запроса к GigaChat: {e}", flush=True)
@@ -200,7 +200,7 @@ def send_message(chat_id, text, attachments=None):
     try:
         response = requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
         if response.status_code != 200:
-            print(f"ОШИБКА ОТПРАВКИ MAX: {response.status_code} - {response.text}", flush=True)
+            print(f"ОШИБКА ОТПРАВКИ MAX ({chat_id}): {response.status_code} - {response.text}", flush=True)
     except Exception as e:
         print(f"Ошибка сети при отправке: {e}", flush=True)
 
@@ -226,7 +226,12 @@ def process_update(update):
     if update_type == "message_callback":
         callback = update.get("callback", {})
         user_id = callback.get("user", {}).get("user_id")
+        
+        # ИСПРАВЛЕНИЕ: MAX может присылать chat_id в разных местах для callback
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id")
+        if not chat_id:
+            chat_id = user_id
+            
         payload = callback.get("payload")
         
         if payload == "btn_new_chat":
