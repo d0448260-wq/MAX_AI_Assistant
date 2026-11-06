@@ -17,6 +17,8 @@ GIGACHAT_AUTH_KEY = "sk_2af1ad731243b8e5f04799d4a82c4c59da3c296b3cb6ad8e"
 
 BASE_URL = "https://botapi.max.ru"
 
+print(f"DEBUG: Токен заканчивается на: {MAX_TOKEN[-5:]}", flush=True)
+
 def init_db():
     print("2. Инициализация базы данных...", flush=True)
     conn = sqlite3.connect('school_assistant.db')
@@ -100,7 +102,7 @@ def ask_gigachat(prompt, context="", mode="explain"):
 
 def send_message(chat_id, text):
     url = f"{BASE_URL}/messages"
-    headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+    headers = {"Authorization": MAX_TOKEN}
     payload = {"chat_id": chat_id, "text": text}
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -111,7 +113,7 @@ def send_message(chat_id, text):
 
 def get_updates(offset=0):
     url = f"{BASE_URL}/updates"
-    headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+    headers = {"Authorization": MAX_TOKEN}
     params = {"offset": offset, "timeout": 30}
     try:
         response = requests.get(url, headers=headers, params=params, timeout=35)
@@ -157,7 +159,7 @@ def process_update(update):
         
         try:
             file_info_url = f"{BASE_URL}/files/{file_id}"
-            headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+            headers = {"Authorization": MAX_TOKEN}
             file_info_resp = requests.get(file_info_url, headers=headers, timeout=10)
             file_info = file_info_resp.json()
             
