@@ -1,23 +1,19 @@
-import telebot
-from telebot import apihelper, types
-import telebot.util
 import requests
-import uuid
+import time
 import sqlite3
+import uuid
 import io
+import os
 from PIL import Image
 import pytesseract
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-telebot.util.validate_token = lambda token: True
-
-MAX_BOT_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
+MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "sk_2af1ad731243b8e5f04799d4a82c4c59da3c296b3cb6ad8e"
 
-apihelper.API_URL = "https://botapi.max.ru/bot{0}/{1}" 
-bot = telebot.TeleBot(MAX_BOT_TOKEN)
+BASE_URL = "https://botapi.max.ru"
 
 def init_db():
     conn = sqlite3.connect('school_assistant.db')
@@ -98,104 +94,109 @@ def ask_gigachat(prompt, context="", mode="explain"):
         print(f"Error GigaChat request: {e}")
         return "Произошла ошибка при генерации ответа."
 
-def get_main_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_explain = types.KeyboardButton('📚 Объяснить тему')
-    btn_check = types.KeyboardButton('📝 Проверить ДЗ')
-    btn_help = types.KeyboardButton('ℹ️ Помощь')
-    markup.add(btn_explain, btn_check, btn_help)
-    return markup
-
-def get_inline_keyboard():
-    markup = types.InlineKeyboardMarkup()
-    btn_more = types.InlineKeyboardButton("🔄 Дай еще задачу", callback_data="more_tasks")
-    btn_simpler = types.InlineKeyboardButton("👶 Объясни еще проще", callback_data="simpler")
-    markup.add(btn_more, btn_simpler)
-    return markup
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    welcome_text = (
-        "👋 **Привет! Я твой персональный ИИ-ассистент.**\n\n"
-        "Я здесь, чтобы помочь тебе с учебой без стресса и осуждения.\n"
-        "📚 **Объясню тему** простым языком и дам задачки для тренировки.\n"
-        "📝 **Проверю твое ДЗ** (по фото или тексту) и укажу на ошибки.\n\n"
-        "Выбери действие на клавиатуре ниже или просто напиши свой вопрос! 👇"
-    )
-    bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=get_main_keyboard())
-
-@bot.message_handler(content_types=['text'])
-def handle_text(message):
-    user_id = message.chat.id
-    text = message.text
-    
-    if text == 'ℹ️ Помощь':
-        bot.send_message(user_id, "Просто напиши вопрос (например: 'Объясни теорему Пифагора') или отправь фото тетради с решением. Я помогу!", reply_markup=get_main_keyboard())
-        return
-
-    if text == '📚 Объяснить тему':
-        bot.send_message(user_id, "Напиши, какую тему ты хочешь разобрать? (например: 'Квадратные уравнения' или 'Закон Ома')", reply_markup=get_main_keyboard())
-        return
-        
-    if text == '📝 Проверить ДЗ':
-        bot.send_message(user_id, "Отправь мне фото своего решения или напиши текст задания и свой ответ. Я проверю!", reply_markup=get_main_keyboard())
-        return
-
-    bot.send_chat_action(user_id, 'typing')
-    msg = bot.send_message(user_id, "⏳ *Секунду, готовлю объяснение...*", parse_mode='Markdown')
-    
-    history = get_history(user_id)
-    response_text = ask_gigachat(text, context=history, mode="explain")
-    
-    bot.edit_message_text(chat_id=user_id, message_id=msg.message_id, text=response_text, parse_mode='Markdown', reply_markup=get_inline_keyboard())
-    update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
-
-@bot.message_handler(content_types=['photo'])
-def handle_photo(message):
-    user_id = message.chat.id
-    msg = bot.send_message(user_id, "📸 *Получил фото! Распознаю текст...*", parse_mode='Markdown')
-    
+def send_message(chat_id, text):
+    url = f"{BASE_URL}/messages"
+    headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+    payload = {"chat_id": chat_id, "text": text}
     try:
-        file_info = bot.get_file(message.photo[len(message.photo)-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            print(f"Send error: {response.text}")
+    except Exception as e:
+        print(f"Error send_message: {e}")
+
+def get_updates(offset=0):
+    url = f"{BASE_URL}/updates"
+    headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+    params = {"offset": offset, "timeout": 30}
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=35)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Updates error: {response.text}")
+            return {}
+    except Exception as e:
+        print(f"Error get_updates: {e}")
+        return {}
+
+def process_update(update):
+    if "message" not in update:
+        return
+
+    message = update["message"]
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    
+    if "text" in message:
+        text = message["text"]
         
-        image = Image.open(io.BytesIO(downloaded_file))
-        extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
-        
-        if not extracted_text.strip():
-            bot.edit_message_text(chat_id=user_id, message_id=msg.message_id, text="😔 Не удалось распознать текст. Сделай фото четче или напиши задание текстом.")
+        if text == "/start" or text == "/help":
+            welcome = (
+                "👋 *Привет! Я твой персональный ИИ-ассистент.*\n\n"
+                "📚 Напиши тему, которую нужно объяснить (например: 'Объясни теорему Пифагора').\n"
+                "📝 Или отправь фото твоего решения, и я проверю его без осуждения."
+            )
+            send_message(chat_id, welcome)
             return
 
-        bot.edit_message_text(chat_id=user_id, message_id=msg.message_id, text="📝 *Текст распознан! Проверяю решение...*", parse_mode='Markdown')
-        bot.send_chat_action(user_id, 'typing')
-        
-        prompt = f"Проверь мою домашнюю работу. Вот задание и мое решение:\n\n{extracted_text}"
+        send_message(chat_id, "⏳ Секунду, готовлю объяснение...")
         history = get_history(user_id)
-        
-        response_text = ask_gigachat(prompt, context=history, mode="check")
-        
-        bot.send_message(user_id, response_text, parse_mode='Markdown', reply_markup=get_inline_keyboard())
-        update_history(user_id, f"Ученик отправил фото ДЗ. Ассистент проверил.")
-        
-    except Exception as e:
-        print(f"Error photo: {e}")
-        bot.edit_message_text(chat_id=user_id, message_id=msg.message_id, text="⚠️ Ошибка обработки фото. Отправь задание текстом.")
+        response_text = ask_gigachat(text, context=history, mode="explain")
+        send_message(chat_id, response_text)
+        update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback_inline(call):
-    user_id = call.message.chat.id
-    if call.data == "more_tasks":
-        bot.answer_callback_query(call.id, "Генерирую новые задачи...")
-        bot.send_chat_action(user_id, 'typing')
-        response = ask_gigachat("Дай мне еще 3 похожие задачи для тренировки по последней теме, которую мы разбирали.", context=get_history(user_id))
-        bot.send_message(user_id, response, parse_mode='Markdown', reply_markup=get_inline_keyboard())
-    elif call.data == "simpler":
-        bot.answer_callback_query(call.id, "Упрощаю...")
-        bot.send_chat_action(user_id, 'typing')
-        response = ask_gigachat("Объясни эту же тему еще проще, как будто мне 10 лет.", context=get_history(user_id))
-        bot.send_message(user_id, response, parse_mode='Markdown', reply_markup=get_inline_keyboard())
+    elif "photo" in message:
+        send_message(chat_id, "📸 Получил фото! Распознаю текст...")
+        photos = message["photo"]
+        file_id = photos[-1]["file_id"]
+        
+        try:
+            file_info_url = f"{BASE_URL}/files/{file_id}"
+            headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+            file_info_resp = requests.get(file_info_url, headers=headers)
+            file_info = file_info_resp.json()
+            
+            file_url = file_info.get("file_path") or file_info.get("url")
+            
+            if file_url:
+                if not file_url.startswith("http"):
+                    file_url = f"{BASE_URL}/{file_url}"
+                
+                img_resp = requests.get(file_url)
+                image = Image.open(io.BytesIO(img_resp.content))
+                extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
+                
+                if extracted_text.strip():
+                    send_message(chat_id, "📝 Текст распознан! Проверяю...")
+                    prompt = f"Проверь мою домашнюю работу:\n\n{extracted_text}"
+                    history = get_history(user_id)
+                    response_text = ask_gigachat(prompt, context=history, mode="check")
+                    send_message(chat_id, response_text)
+                    update_history(user_id, f"Ученик отправил фото ДЗ. Ассистент проверил.")
+                else:
+                    send_message(chat_id, "😔 Не удалось распознать текст. Сделай фото четче или напиши задание текстом.")
+            else:
+                send_message(chat_id, "⚠️ Не удалось получить ссылку на фото.")
+                
+        except Exception as e:
+            print(f"Error photo processing: {e}")
+            send_message(chat_id, "⚠️ Ошибка обработки фото. Отправь задание текстом.")
+
+def main():
+    init_db()
+    print("Bot started! Listening for updates...")
+    offset = 0
+    
+    while True:
+        updates = get_updates(offset)
+        
+        if updates and "result" in updates:
+            for update in updates["result"]:
+                process_update(update)
+                offset = update["update_id"] + 1
+                
+        time.sleep(1)
 
 if __name__ == '__main__':
-    init_db()
-    print("Bot started!")
-    bot.infinity_polling()
+    main()
