@@ -37,7 +37,6 @@ def get_active_session(user_id):
     cursor = conn.cursor()
     cursor.execute("SELECT current_session_id FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
-    
     if not row or not row[0]:
         cursor.execute("INSERT INTO sessions (user_id, title, history) VALUES (?, ?, ?)", (user_id, "Чат 1", ""))
         session_id = cursor.lastrowid
@@ -45,7 +44,6 @@ def get_active_session(user_id):
         conn.commit()
         conn.close()
         return session_id
-    
     conn.close()
     return row[0]
 
@@ -55,7 +53,6 @@ def create_new_session(user_id):
     cursor.execute("SELECT COUNT(*) FROM sessions WHERE user_id = ?", (user_id,))
     count = cursor.fetchone()[0]
     title = f"Чат {count + 1}"
-    
     cursor.execute("INSERT INTO sessions (user_id, title, history) VALUES (?, ?, ?)", (user_id, title, ""))
     session_id = cursor.lastrowid
     cursor.execute("UPDATE users SET current_session_id = ? WHERE user_id = ?", (session_id, user_id))
@@ -131,15 +128,18 @@ def get_gigachat_token():
     }
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
-        return response.json().get('access_token')
+        print(f"DEBUG AUTH: Status {response.status_code} - {response.text}", flush=True)
+        if response.status_code == 200:
+            return response.json().get('access_token')
+        return None
     except Exception as e:
-        print(f"Ошибка авторизации GigaChat: {e}", flush=True)
+        print(f"Ошибка сети GigaChat: {e}", flush=True)
         return None
 
 def ask_gigachat(prompt, context="", mode="explain"):
     token = get_gigachat_token()
     if not token:
-        return "Извините, произошла ошибка подключения к ИИ."
+        return "Извините, произошла ошибка подключения к ИИ. Попробуйте позже."
 
     url = "https://api.giga.chat/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
@@ -160,7 +160,7 @@ def ask_gigachat(prompt, context="", mode="explain"):
 
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
-        print(f"ОТВЕТ ОТ GIGACHAT: {response.status_code}", flush=True)
+        print(f"DEBUG API: Status {response.status_code} - {response.text[:200]}", flush=True)
         return response.json()['choices'][0]['message']['content']
     except Exception as e:
         print(f"Ошибка запроса к GigaChat: {e}", flush=True)
@@ -230,34 +230,27 @@ def process_update(update):
         if payload == "btn_new_chat":
             create_new_session(user_id)
             send_message(chat_id, "✨ Создан новый чат! Теперь мы общаемся в чистом контексте. Задай свой вопрос.")
-            
         elif payload == "btn_list_chats":
             sessions = get_user_sessions(user_id)
             buttons = []
             for sess in sessions:
                 buttons.append([{"type": "callback", "text": f"💬 {sess[1]}", "payload": f"switch_{sess[0]}"}])
-            
-            kb = {
-                "type": "inline_keyboard",
-                "payload": {"buttons": buttons}
-            }
+            kb = {"type": "inline_keyboard", "payload": {"buttons": buttons}}
             send_message(chat_id, "Выбери чат, к которому хочешь вернуться:", attachments=[kb])
-            
         elif payload.startswith("switch_"):
             session_id = int(payload.split("_")[1])
             if switch_session(user_id, session_id):
                 send_message(chat_id, f"✅ Переключено на выбранный чат. Продолжаем!")
             else:
                 send_message(chat_id, "❌ Ошибка: чат не найден.")
-                
         elif payload == "btn_explain":
-            send_message(chat_id, "Напиши тему, которую нужно объяснить (например: 'Теорема Пифагора').")
+            send_message(chat_id, "Напиши тему, которую нужно объяснить.")
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
             send_message(chat_id, "📸 Отправь мне фото с задачей, и я решу её с подробным объяснением!")
         elif payload == "btn_check_hw":
             set_user_state(user_id, "waiting_for_check_hw")
-            send_message(chat_id, "📝 Отправь фото или текст своего решения, и я проверю его без осуждения.")
+            send_message(chat_id, "📝 Отправь фото или текст своего решения.")
         return
 
     if update_type != "message_created":
@@ -274,7 +267,7 @@ def process_update(update):
     
     if text == "/start" or text == "/help":
         get_active_session(user_id)
-        welcome = "👋 Привет! Я твой персональный ИИ-ассистент.\n\nТеперь я умею создавать чаты! Нажми «➕ Новый чат», чтобы начать новую тему, или «📂 Мои чаты», чтобы вернуться к старой."
+        welcome = "👋 Привет! Я твой персональный ИИ-ассистент.\n\nНажми «➕ Новый чат», чтобы начать новую тему, или «📂 Мои чаты», чтобы вернуться к старой."
         send_message(chat_id, welcome)
         return
 
@@ -310,10 +303,9 @@ def process_update(update):
             send_message(chat_id, response_text)
             update_history(user_id, f"Ученик отправил фото. Ассистент ответил.")
             set_user_state(user_id, "idle")
-            
         except Exception as e:
             print(f"Ошибка обработки фото: {e}", flush=True)
-            send_message(chat_id, "⚠️ Ошибка при обработке фото. Попробуй еще раз.")
+            send_message(chat_id, "⚠️ Ошибка при обработке фото.")
         return
 
     if text:
@@ -329,7 +321,6 @@ def main():
     init_db()
     print("Бот запущен! Слушаю обновления...", flush=True)
     marker = 0
-    
     while True:
         try:
             updates_data = get_updates(marker)
