@@ -96,10 +96,10 @@ def ask_gigachat(prompt, context="", mode="explain"):
 
 def send_message(chat_id, text):
     url = f"{BASE_URL}/messages"
-    params = {"access_token": MAX_TOKEN}
+    headers = {"Authorization": MAX_TOKEN}
     payload = {"chat_id": chat_id, "text": text}
     try:
-        response = requests.post(url, params=params, json=payload)
+        response = requests.post(url, headers=headers, json=payload)
         if response.status_code != 200:
             print(f"Send error: {response.text}")
     except Exception as e:
@@ -107,9 +107,10 @@ def send_message(chat_id, text):
 
 def get_updates(offset=0):
     url = f"{BASE_URL}/updates"
-    params = {"access_token": MAX_TOKEN, "offset": offset, "timeout": 30}
+    headers = {"Authorization": MAX_TOKEN}
+    params = {"offset": offset, "timeout": 30}
     try:
-        response = requests.get(url, params=params, timeout=35)
+        response = requests.get(url, headers=headers, params=params, timeout=35)
         if response.status_code == 200:
             return response.json()
         else:
@@ -152,8 +153,8 @@ def process_update(update):
         
         try:
             file_info_url = f"{BASE_URL}/files/{file_id}"
-            params = {"access_token": MAX_TOKEN}
-            file_info_resp = requests.get(file_info_url, params=params)
+            headers = {"Authorization": MAX_TOKEN}
+            file_info_resp = requests.get(file_info_url, headers=headers)
             file_info = file_info_resp.json()
             
             file_url = file_info.get("file_path") or file_info.get("url")
