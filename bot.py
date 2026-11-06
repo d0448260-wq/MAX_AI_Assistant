@@ -108,14 +108,16 @@ def send_message(chat_id, text):
 def get_updates(offset=0):
     url = f"{BASE_URL}/updates"
     headers = {"Authorization": MAX_TOKEN}
-    params = {"offset": offset}
+    params = {"offset": offset, "timeout": 30}
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=35)
         if response.status_code == 200:
             return response.json()
         else:
             print(f"Updates error: {response.text}", flush=True)
             return {}
+    except requests.exceptions.ReadTimeout:
+        return {}
     except Exception as e:
         print(f"Error get_updates: {e}", flush=True)
         return {}
@@ -189,14 +191,18 @@ def main():
     offset = 0
     
     while True:
-        updates = get_updates(offset)
-        
-        if updates and "result" in updates:
-            for update in updates["result"]:
-                process_update(update)
-                offset = update["update_id"] + 1
-                
-        time.sleep(0.5)
+        try:
+            updates = get_updates(offset)
+            
+            if updates and "result" in updates:
+                for update in updates["result"]:
+                    process_update(update)
+                    offset = update["update_id"] + 1
+                    
+            time.sleep(1)
+        except Exception as e:
+            print(f"Критическая ошибка в цикле: {e}", flush=True)
+            time.sleep(5)
 
 if __name__ == '__main__':
     main()
