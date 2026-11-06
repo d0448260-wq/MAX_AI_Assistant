@@ -97,25 +97,25 @@ def ask_gigachat(prompt, context="", mode="explain"):
 def send_message(chat_id, text):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
-    payload = {"chat_id": chat_id, "text": text}
+    params = {"chat_id": chat_id}
+    payload = {"text": text}
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
         if response.status_code != 200:
             print(f"Send error: {response.text}", flush=True)
     except Exception as e:
         print(f"Error send_message: {e}", flush=True)
 
-def get_updates(offset=0):
+def get_updates(marker=0):
     url = f"{BASE_URL}/updates"
     headers = {"Authorization": MAX_TOKEN}
-    params = {"offset": offset, "timeout": 30}
+    params = {"timeout": 30, "limit": 100}
+    if marker:
+        params["marker"] = marker
     try:
         response = requests.get(url, headers=headers, params=params, timeout=35)
         if response.status_code == 200:
-            data = response.json()
-            if data and data.get("result"):
-                print(f"ПОЛУЧЕНЫ ДАННЫЕ ОТ MAX: {data}", flush=True)
-            return data
+            return response.json()
         else:
             print(f"Updates error (Status {response.status_code}): {response.text}", flush=True)
             return {}
@@ -126,48 +126,41 @@ def get_updates(offset=0):
         return {}
 
 def process_update(update):
-    print(f"ОБРАБОТКА ОБНОВЛЕНИЯ: {update}", flush=True)
-    
-    if "message" not in update:
-        print("В обновлении нет ключа 'message'", flush=True)
+    if update.get("update_type") != "message_created":
         return
 
-    message = update["message"]
-    chat_id = message.get("chat", {}).get("id")
-    user_id = message.get("from", {}).get("id")
-    
-    if not chat_id or not user_id:
-        print("Не удалось найти chat_id или user_id", flush=True)
+    message = update.get("message", {})
+    chat_id = message.get("recipient", {}).get("chat_id")
+    user_id = message.get("sender", {}).get("user_id")
+    text = message.get("body", {}).get("text", "")
+
+    if not chat_id or not user_id or not text:
         return
     
-    if "text" in message:
-        text = message["text"]
-        print(f"Текст сообщения: {text}", flush=True)
-        
-        if text == "/start" or text == "/help":
-            welcome = "👋 Привет! Я твой персональный ИИ-ассистент."
-            send_message(chat_id, welcome)
-            return
+    if text == "/start" or text == "/help":
+        welcome = "👋 Привет! Я твой персональный ИИ-ассистент. Задай мне вопрос!"
+        send_message(chat_id, welcome)
+        return
 
-        send_message(chat_id, "⏳ Секунду, готовлю объяснение...")
-        history = get_history(user_id)
-        response_text = ask_gigachat(text, context=history, mode="explain")
-        send_message(chat_id, response_text)
-        update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
+    send_message(chat_id, "⏳ Секунду, готовлю объяснение...")
+    history = get_history(user_id)
+    response_text = ask_gigachat(text, context=history, mode="explain")
+    send_message(chat_id, response_text)
+    update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
 
 def main():
     init_db()
     print("Бот запущен! Слушаю обновления...", flush=True)
-    offset = 0
+    marker = 0
     
     while True:
         try:
-            updates = get_updates(offset)
+            updates_data = get_updates(marker)
             
-            if updates and "result" in updates:
-                for update in updates["result"]:
+            if updates_data and "updates" in updates_data:
+                for update in updates_data["updates"]:
                     process_update(update)
-                    offset = update.get("update_id", offset) + 1
+                    marker = update.get("timestamp", marker) 
                     
             time.sleep(1)
         except Exception as e:
