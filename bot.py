@@ -14,7 +14,7 @@ def get_updates(marker=0):
     if marker:
         params["marker"] = marker
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=35)
+        response = requests.get(url, headers=headers, params=params, timeout=35, verify=False)
         if response.status_code == 200:
             return response.json()
         else:
@@ -32,7 +32,7 @@ def send_message(chat_id, text):
     params = {"chat_id": chat_id}
     payload = {"text": text}
     try:
-        response = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
         print(f"ОТПРАВКА: {response.status_code} - {response.text}", flush=True)
     except Exception as e:
         print(f"Ошибка отправки: {e}", flush=True)
