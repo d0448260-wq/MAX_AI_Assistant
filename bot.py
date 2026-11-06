@@ -10,17 +10,12 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("1. Начинаем запуск скрипта...", flush=True)
-
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "sk_2af1ad731243b8e5f04799d4a82c4c59da3c296b3cb6ad8e"
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OmE0MWExMWZjLWYwYTEtNGM1Ny1hYzY5LTVkOWFkMzA0MTFmMA=="
 
 BASE_URL = "https://botapi.max.ru"
 
-print(f"DEBUG: Токен заканчивается на: {MAX_TOKEN[-5:]}", flush=True)
-
 def init_db():
-    print("2. Инициализация базы данных...", flush=True)
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
@@ -29,7 +24,6 @@ def init_db():
                       )''')
     conn.commit()
     conn.close()
-    print("3. База данных готова.", flush=True)
 
 def get_history(user_id):
     conn = sqlite3.connect('school_assistant.db')
@@ -114,9 +108,9 @@ def send_message(chat_id, text):
 def get_updates(offset=0):
     url = f"{BASE_URL}/updates"
     headers = {"Authorization": MAX_TOKEN}
-    params = {"offset": offset, "timeout": 30}
+    params = {"offset": offset}
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=35)
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         if response.status_code == 200:
             return response.json()
         else:
@@ -191,7 +185,7 @@ def process_update(update):
 
 def main():
     init_db()
-    print("4. Бот запущен! Слушаю обновления...", flush=True)
+    print("Бот запущен! Слушаю обновления...", flush=True)
     offset = 0
     
     while True:
@@ -202,10 +196,7 @@ def main():
                 process_update(update)
                 offset = update["update_id"] + 1
                 
-        time.sleep(1)
+        time.sleep(0.5)
 
 if __name__ == '__main__':
-    try:
-        main()
-    except Exception as e:
-        print(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", flush=True)
+    main()
