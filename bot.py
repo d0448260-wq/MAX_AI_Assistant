@@ -10,12 +10,15 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+print("1. Начинаем запуск скрипта...", flush=True)
+
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "sk_2af1ad731243b8e5f04799d4a82c4c59da3c296b3cb6ad8e"
 
 BASE_URL = "https://botapi.max.ru"
 
 def init_db():
+    print("2. Инициализация базы данных...", flush=True)
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
@@ -24,6 +27,7 @@ def init_db():
                       )''')
     conn.commit()
     conn.close()
+    print("3. База данных готова.", flush=True)
 
 def get_history(user_id):
     conn = sqlite3.connect('school_assistant.db')
@@ -52,10 +56,10 @@ def get_gigachat_token():
         'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'
     }
     try:
-        response = requests.post(url, headers=headers, data=payload, verify=False)
+        response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
         return response.json().get('access_token')
     except Exception as e:
-        print(f"Error GigaChat auth: {e}")
+        print(f"Error GigaChat auth: {e}", flush=True)
         return None
 
 def ask_gigachat(prompt, context="", mode="explain"):
@@ -88,36 +92,36 @@ def ask_gigachat(prompt, context="", mode="explain"):
     data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
 
     try:
-        response = requests.post(url, headers=headers, json=data, verify=False)
+        response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
         return response.json()['choices'][0]['message']['content']
     except Exception as e:
-        print(f"Error GigaChat request: {e}")
+        print(f"Error GigaChat request: {e}", flush=True)
         return "Произошла ошибка при генерации ответа."
 
 def send_message(chat_id, text):
     url = f"{BASE_URL}/messages"
-    headers = {"Authorization": MAX_TOKEN}
+    headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
     payload = {"chat_id": chat_id, "text": text}
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
         if response.status_code != 200:
-            print(f"Send error: {response.text}")
+            print(f"Send error: {response.text}", flush=True)
     except Exception as e:
-        print(f"Error send_message: {e}")
+        print(f"Error send_message: {e}", flush=True)
 
 def get_updates(offset=0):
     url = f"{BASE_URL}/updates"
-    headers = {"Authorization": MAX_TOKEN}
+    headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
     params = {"offset": offset, "timeout": 30}
     try:
         response = requests.get(url, headers=headers, params=params, timeout=35)
         if response.status_code == 200:
             return response.json()
         else:
-            print(f"Updates error: {response.text}")
+            print(f"Updates error: {response.text}", flush=True)
             return {}
     except Exception as e:
-        print(f"Error get_updates: {e}")
+        print(f"Error get_updates: {e}", flush=True)
         return {}
 
 def process_update(update):
@@ -153,8 +157,8 @@ def process_update(update):
         
         try:
             file_info_url = f"{BASE_URL}/files/{file_id}"
-            headers = {"Authorization": MAX_TOKEN}
-            file_info_resp = requests.get(file_info_url, headers=headers)
+            headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+            file_info_resp = requests.get(file_info_url, headers=headers, timeout=10)
             file_info = file_info_resp.json()
             
             file_url = file_info.get("file_path") or file_info.get("url")
@@ -163,7 +167,7 @@ def process_update(update):
                 if not file_url.startswith("http"):
                     file_url = f"{BASE_URL}/{file_url}"
                 
-                img_resp = requests.get(file_url)
+                img_resp = requests.get(file_url, timeout=10)
                 image = Image.open(io.BytesIO(img_resp.content))
                 extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
                 
@@ -180,12 +184,12 @@ def process_update(update):
                 send_message(chat_id, "⚠️ Не удалось получить ссылку на фото.")
                 
         except Exception as e:
-            print(f"Error photo processing: {e}")
+            print(f"Error photo processing: {e}", flush=True)
             send_message(chat_id, "⚠️ Ошибка обработки фото. Отправь задание текстом.")
 
 def main():
     init_db()
-    print("Bot started! Listening for updates...")
+    print("4. Бот запущен! Слушаю обновления...", flush=True)
     offset = 0
     
     while True:
@@ -199,4 +203,7 @@ def main():
         time.sleep(1)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", flush=True)
