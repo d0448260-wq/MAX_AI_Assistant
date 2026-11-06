@@ -10,8 +10,12 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+print("=========================================", flush=True)
+print("ЗАПУСК НОВОГО КОДА С КНОПКАМИ...", flush=True)
+print("=========================================", flush=True)
+
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OmU0MDgyYmNlLWI2YzMtNDA2Zi1iY2YyLWQyZTA0MTZjMmZkMA=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
@@ -128,10 +132,8 @@ def get_gigachat_token():
     }
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
-        print(f"DEBUG AUTH: Status {response.status_code} - {response.text}", flush=True)
-        if response.status_code == 200:
-            return response.json().get('access_token')
-        return None
+        print(f"DEBUG AUTH GIGACHAT: {response.status_code} -> {response.text}", flush=True)
+        return response.json().get('access_token')
     except Exception as e:
         print(f"Ошибка сети GigaChat: {e}", flush=True)
         return None
@@ -139,32 +141,26 @@ def get_gigachat_token():
 def ask_gigachat(prompt, context="", mode="explain"):
     token = get_gigachat_token()
     if not token:
-        return "Извините, произошла ошибка подключения к ИИ. Попробуйте позже."
+        return "Извините, произошла ошибка авторизации в ИИ (проверьте логи)."
 
     url = "https://api.giga.chat/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
-    if mode == "explain":
-        system_prompt = "Ты — дружелюбный ИИ-ассистент для школьников 5-11 классов. Объясняй сложные темы простым языком. НИКОГДА не осуждай за незнание. Структура ответа: 1. Простое объяснение. 2. Пример. 3. Три тренировочные задачи. Используй эмодзи и Markdown."
-    elif mode == "solve":
-        system_prompt = "Ты — отличный репетитор. Ученик прислал задачу (распознанную с фото). Реши её по шагам. Объясни каждое действие. Дай итоговый ответ. Используй Markdown."
-    else:
-        system_prompt = "Ты — заботливый учитель. Ученик прислал домашнее задание. Найди ошибки (если есть), объясни ПОЧЕМУ они возникли, как правильно, и какое правило нужно повторить. Пиши мягко. Используй Markdown."
-
+    system_prompt = "Ты — дружелюбный ИИ-ассистент для школьников. Отвечай понятно."
     messages = [{"role": "system", "content": system_prompt}]
     if context:
-        messages.append({"role": "user", "content": f"История нашего диалога: {context}"})
+        messages.append({"role": "user", "content": f"История: {context}"})
     messages.append({"role": "user", "content": prompt})
 
-    data = {"model": "GigaChat-2", "messages": messages, "temperature": 0.7}
+    data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
 
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
-        print(f"DEBUG API: Status {response.status_code} - {response.text[:200]}", flush=True)
+        print(f"DEBUG API GIGACHAT: {response.status_code} -> {response.text[:150]}", flush=True)
         return response.json()['choices'][0]['message']['content']
     except Exception as e:
         print(f"Ошибка запроса к GigaChat: {e}", flush=True)
-        return "Произошла ошибка при генерации ответа."
+        return "Ошибка при генерации ответа."
 
 def get_main_keyboard():
     return {
@@ -178,9 +174,6 @@ def get_main_keyboard():
                 [
                     {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"},
                     {"type": "callback", "text": "📸 Решить задачу с фото", "payload": "btn_solve_photo"}
-                ],
-                [
-                    {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"}
                 ]
             ]
         }
@@ -198,9 +191,10 @@ def send_message(chat_id, text, attachments=None):
         payload["attachments"] = attachments
 
     try:
-        requests.post(url, headers=headers, params=params, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
+        print(f"DEBUG SEND MSG: {response.status_code} -> {response.text}", flush=True)
     except Exception as e:
-        print(f"Ошибка отправки send_message: {e}", flush=True)
+        print(f"Ошибка отправки: {e}", flush=True)
 
 def get_updates(marker=0):
     url = f"{BASE_URL}/updates"
@@ -229,28 +223,14 @@ def process_update(update):
         
         if payload == "btn_new_chat":
             create_new_session(user_id)
-            send_message(chat_id, "✨ Создан новый чат! Теперь мы общаемся в чистом контексте. Задай свой вопрос.")
+            send_message(chat_id, "✨ Создан новый чат! Задай свой вопрос.")
         elif payload == "btn_list_chats":
             sessions = get_user_sessions(user_id)
-            buttons = []
-            for sess in sessions:
-                buttons.append([{"type": "callback", "text": f"💬 {sess[1]}", "payload": f"switch_{sess[0]}"}])
-            kb = {"type": "inline_keyboard", "payload": {"buttons": buttons}}
-            send_message(chat_id, "Выбери чат, к которому хочешь вернуться:", attachments=[kb])
+            buttons = [[{"type": "callback", "text": f"💬 {sess[1]}", "payload": f"switch_{sess[0]}"}] for sess in sessions]
+            send_message(chat_id, "Выбери чат:", attachments=[{"type": "inline_keyboard", "payload": {"buttons": buttons}}])
         elif payload.startswith("switch_"):
-            session_id = int(payload.split("_")[1])
-            if switch_session(user_id, session_id):
-                send_message(chat_id, f"✅ Переключено на выбранный чат. Продолжаем!")
-            else:
-                send_message(chat_id, "❌ Ошибка: чат не найден.")
-        elif payload == "btn_explain":
-            send_message(chat_id, "Напиши тему, которую нужно объяснить.")
-        elif payload == "btn_solve_photo":
-            set_user_state(user_id, "waiting_for_solve_photo")
-            send_message(chat_id, "📸 Отправь мне фото с задачей, и я решу её с подробным объяснением!")
-        elif payload == "btn_check_hw":
-            set_user_state(user_id, "waiting_for_check_hw")
-            send_message(chat_id, "📝 Отправь фото или текст своего решения.")
+            switch_session(user_id, int(payload.split("_")[1]))
+            send_message(chat_id, "✅ Переключено на выбранный чат.")
         return
 
     if update_type != "message_created":
@@ -260,66 +240,26 @@ def process_update(update):
     chat_id = message.get("recipient", {}).get("chat_id")
     user_id = message.get("sender", {}).get("user_id")
     text = message.get("body", {}).get("text", "")
-    attachments = message.get("body", {}).get("attachments", [])
 
     if not chat_id or not user_id:
         return
     
     if text == "/start" or text == "/help":
         get_active_session(user_id)
-        welcome = "👋 Привет! Я твой персональный ИИ-ассистент.\n\nНажми «➕ Новый чат», чтобы начать новую тему, или «📂 Мои чаты», чтобы вернуться к старой."
+        welcome = "👋 Привет! Я твой ИИ-ассистент.\n\nИспользуй кнопки ниже, чтобы создать новый чат или задать вопрос!"
         send_message(chat_id, welcome)
-        return
-
-    user_state = get_user_state(user_id)
-    image_url = None
-
-    for att in attachments:
-        if att.get("type") == "image":
-            image_url = att.get("payload", {}).get("url")
-            break
-
-    if image_url:
-        send_message(chat_id, "📸 Фото получено! Распознаю текст...")
-        try:
-            img_resp = requests.get(image_url, timeout=15)
-            image = Image.open(io.BytesIO(img_resp.content))
-            extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
-            
-            if not extracted_text.strip():
-                send_message(chat_id, "😔 Не удалось распознать текст. Попробуй сфотографировать четче.")
-                return
-            
-            send_message(chat_id, "✅ Текст распознан. Отправляю ИИ...")
-            
-            if user_state == "waiting_for_check_hw":
-                mode = "check"
-                prompt = f"Проверь мою домашнюю работу:\n\n{extracted_text}"
-            else:
-                mode = "solve"
-                prompt = f"Реши эту задачу по шагам:\n\n{extracted_text}"
-            
-            response_text = ask_gigachat(prompt, context=get_history(user_id), mode=mode)
-            send_message(chat_id, response_text)
-            update_history(user_id, f"Ученик отправил фото. Ассистент ответил.")
-            set_user_state(user_id, "idle")
-        except Exception as e:
-            print(f"Ошибка обработки фото: {e}", flush=True)
-            send_message(chat_id, "⚠️ Ошибка при обработке фото.")
         return
 
     if text:
         send_message(chat_id, "⏳ Думаю...")
         history = get_history(user_id)
-        mode = "check" if user_state == "waiting_for_check_hw" else "explain"
-        response_text = ask_gigachat(text, context=history, mode=mode)
+        response_text = ask_gigachat(text, context=history)
         send_message(chat_id, response_text)
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
-        set_user_state(user_id, "idle")
 
 def main():
     init_db()
-    print("Бот запущен! Слушаю обновления...", flush=True)
+    print("Бот запущен и слушает сообщения...", flush=True)
     marker = 0
     while True:
         try:
@@ -330,7 +270,6 @@ def main():
                     marker = update.get("timestamp", marker) 
             time.sleep(1)
         except Exception as e:
-            print(f"Критическая ошибка в цикле: {e}", flush=True)
             time.sleep(5)
 
 if __name__ == '__main__':
