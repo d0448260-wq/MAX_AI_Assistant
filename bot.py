@@ -20,7 +20,8 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
-                        history TEXT
+                        history TEXT,
+                        state TEXT
                       )''')
     conn.commit()
     conn.close()
@@ -41,6 +42,22 @@ def update_history(user_id, new_message):
     cursor.execute("INSERT OR REPLACE INTO users (user_id, history) VALUES (?, ?)", (user_id, history))
     conn.commit()
     conn.close()
+
+def set_user_state(user_id, state):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, state) VALUES (?, ?)", (user_id, state))
+    cursor.execute("UPDATE users SET state = ? WHERE user_id = ?", (state, user_id))
+    conn.commit()
+    conn.close()
+
+def get_user_state(user_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT state FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 def get_gigachat_token():
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
@@ -68,6 +85,8 @@ def ask_gigachat(prompt, context="", mode="explain"):
     
     if mode == "explain":
         system_prompt = "Ты — дружелюбный ИИ-ассистент для школьников 5-11 классов. Объясняй сложные темы простым языком. НИКОГДА не осуждай за незнание. Структура ответа: 1. Простое объяснение. 2. Пример. 3. Три тренировочные задачи. Используй эмодзи и Markdown."
+    elif mode == "solve":
+        system_prompt = "Ты — отличный репетитор. Ученик прислал задачу (распознанную с фото). Реши её по шагам. Объясни каждое действие. Дай итоговый ответ. Используй Markdown."
     else:
         system_prompt = "Ты — заботливый учитель. Ученик прислал домашнее задание. Найди ошибки (если есть), объясни ПОЧЕМУ они возникли, как правильно, и какое правило нужно повторить. Пиши мягко. Используй Markdown."
 
@@ -86,11 +105,31 @@ def ask_gigachat(prompt, context="", mode="explain"):
         print(f"Ошибка запроса к GigaChat: {e}", flush=True)
         return "Произошла ошибка при генерации ответа."
 
-def send_message(chat_id, text):
+def send_message(chat_id, text, with_keyboard=False):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
     payload = {"text": text}
+
+    if with_keyboard:
+        payload["attachments"] = [
+            {
+                "type": "inline_keyboard",
+                "payload": {
+                    "buttons": [
+                        [
+                            {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"},
+                            {"type": "callback", "text": "📸 Решить задачу с фото", "payload": "btn_solve_photo"}
+                        ],
+                        [
+                            {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"},
+                            {"type": "callback", "text": "ℹ️ Помощь", "payload": "btn_help"}
+                        ]
+                    ]
+                }
+            }
+        ]
+
     try:
         response = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
         print(f"ОТВЕТ ОТ MAX (отправка): {response.status_code} - {response.text}", flush=True)
@@ -120,27 +159,90 @@ def get_updates(marker=0):
         return {}
 
 def process_update(update):
-    if update.get("update_type") != "message_created":
+    update_type = update.get("update_type")
+    
+    if update_type == "message_callback":
+        callback = update.get("callback", {})
+        user_id = callback.get("user", {}).get("user_id")
+        chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id")
+        payload = callback.get("payload")
+        
+        if payload == "btn_help":
+            send_message(chat_id, "👋 Я умею: \n1. Объяснять темы.\n2. Решать задачи по фото.\n3. Проверять твои решения.\n\nПросто выбери кнопку или напиши вопрос!", with_keyboard=True)
+        elif payload == "btn_explain":
+            send_message(chat_id, "Напиши тему, которую нужно объяснить (например: 'Теорема Пифагора').")
+        elif payload == "btn_solve_photo":
+            set_user_state(user_id, "waiting_for_solve_photo")
+            send_message(chat_id, "📸 Отправь мне фото с задачей, и я решу её с подробным объяснением!")
+        elif payload == "btn_check_hw":
+            set_user_state(user_id, "waiting_for_check_hw")
+            send_message(chat_id, "📝 Отправь фото или текст своего решения, и я проверю его без осуждения.")
+        return
+
+    if update_type != "message_created":
         return
 
     message = update.get("message", {})
     chat_id = message.get("recipient", {}).get("chat_id")
     user_id = message.get("sender", {}).get("user_id")
     text = message.get("body", {}).get("text", "")
+    attachments = message.get("body", {}).get("attachments", [])
 
-    if not chat_id or not user_id or not text:
+    if not chat_id or not user_id:
         return
     
     if text == "/start" or text == "/help":
-        welcome = "👋 Привет! Я твой персональный ИИ-ассистент. Задай мне вопрос!"
-        send_message(chat_id, welcome)
+        welcome = "👋 Привет! Я твой персональный ИИ-ассистент. Выбери действие на кнопках ниже или просто напиши свой вопрос!"
+        send_message(chat_id, welcome, with_keyboard=True)
+        set_user_state(user_id, "idle")
         return
 
-    send_message(chat_id, "⏳ Секунду, готовлю объяснение...")
-    history = get_history(user_id)
-    response_text = ask_gigachat(text, context=history, mode="explain")
-    send_message(chat_id, response_text)
-    update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
+    user_state = get_user_state(user_id)
+    image_url = None
+
+    for att in attachments:
+        if att.get("type") == "image":
+            image_url = att.get("payload", {}).get("url")
+            break
+
+    if image_url:
+        send_message(chat_id, "📸 Фото получено! Распознаю текст...")
+        try:
+            img_resp = requests.get(image_url, timeout=15)
+            image = Image.open(io.BytesIO(img_resp.content))
+            extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
+            
+            if not extracted_text.strip():
+                send_message(chat_id, "😔 Не удалось распознать текст. Попробуй сфотографировать четче или напиши задание текстом.")
+                return
+            
+            send_message(chat_id, "✅ Текст распознан. Отправляю ИИ на решение...")
+            
+            if user_state == "waiting_for_check_hw":
+                mode = "check"
+                prompt = f"Проверь мою домашнюю работу:\n\n{extracted_text}"
+            else:
+                mode = "solve"
+                prompt = f"Реши эту задачу по шагам и объясни:\n\n{extracted_text}"
+            
+            response_text = ask_gigachat(prompt, context=get_history(user_id), mode=mode)
+            send_message(chat_id, response_text, with_keyboard=True)
+            update_history(user_id, f"Ученик отправил фото. Ассистент ответил.")
+            set_user_state(user_id, "idle")
+            
+        except Exception as e:
+            print(f"Ошибка обработки фото: {e}", flush=True)
+            send_message(chat_id, "⚠️ Ошибка при обработке фото. Попробуй еще раз.")
+        return
+
+    if text:
+        send_message(chat_id, "⏳ Думаю над ответом...")
+        history = get_history(user_id)
+        mode = "check" if user_state == "waiting_for_check_hw" else "explain"
+        response_text = ask_gigachat(text, context=history, mode=mode)
+        send_message(chat_id, response_text, with_keyboard=True)
+        update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
+        set_user_state(user_id, "idle")
 
 def main():
     init_db()
@@ -150,12 +252,10 @@ def main():
     while True:
         try:
             updates_data = get_updates(marker)
-            
             if updates_data and "updates" in updates_data:
                 for update in updates_data["updates"]:
                     process_update(update)
                     marker = update.get("timestamp", marker) 
-                    
             time.sleep(1)
         except Exception as e:
             print(f"Критическая ошибка в цикле: {e}", flush=True)
