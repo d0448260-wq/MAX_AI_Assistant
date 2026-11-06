@@ -112,33 +112,40 @@ def get_updates(offset=0):
     try:
         response = requests.get(url, headers=headers, params=params, timeout=35)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            if data and data.get("result"):
+                print(f"ПОЛУЧЕНЫ ДАННЫЕ ОТ MAX: {data}", flush=True)
+            return data
         else:
-            print(f"Updates error: {response.text}", flush=True)
+            print(f"Updates error (Status {response.status_code}): {response.text}", flush=True)
             return {}
     except requests.exceptions.ReadTimeout:
-        return {}
+        pass
     except Exception as e:
         print(f"Error get_updates: {e}", flush=True)
         return {}
 
 def process_update(update):
+    print(f"ОБРАБОТКА ОБНОВЛЕНИЯ: {update}", flush=True)
+    
     if "message" not in update:
+        print("В обновлении нет ключа 'message'", flush=True)
         return
 
     message = update["message"]
-    chat_id = message["chat"]["id"]
-    user_id = message["from"]["id"]
+    chat_id = message.get("chat", {}).get("id")
+    user_id = message.get("from", {}).get("id")
+    
+    if not chat_id or not user_id:
+        print("Не удалось найти chat_id или user_id", flush=True)
+        return
     
     if "text" in message:
         text = message["text"]
+        print(f"Текст сообщения: {text}", flush=True)
         
         if text == "/start" or text == "/help":
-            welcome = (
-                "👋 *Привет! Я твой персональный ИИ-ассистент.*\n\n"
-                "📚 Напиши тему, которую нужно объяснить (например: 'Объясни теорему Пифагора').\n"
-                "📝 Или отправь фото твоего решения, и я проверю его без осуждения."
-            )
+            welcome = "👋 Привет! Я твой персональный ИИ-ассистент."
             send_message(chat_id, welcome)
             return
 
@@ -147,43 +154,6 @@ def process_update(update):
         response_text = ask_gigachat(text, context=history, mode="explain")
         send_message(chat_id, response_text)
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
-
-    elif "photo" in message:
-        send_message(chat_id, "📸 Получил фото! Распознаю текст...")
-        photos = message["photo"]
-        file_id = photos[-1]["file_id"]
-        
-        try:
-            file_info_url = f"{BASE_URL}/files/{file_id}"
-            headers = {"Authorization": MAX_TOKEN}
-            file_info_resp = requests.get(file_info_url, headers=headers, timeout=10)
-            file_info = file_info_resp.json()
-            
-            file_url = file_info.get("file_path") or file_info.get("url")
-            
-            if file_url:
-                if not file_url.startswith("http"):
-                    file_url = f"{BASE_URL}/{file_url}"
-                
-                img_resp = requests.get(file_url, timeout=10)
-                image = Image.open(io.BytesIO(img_resp.content))
-                extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
-                
-                if extracted_text.strip():
-                    send_message(chat_id, "📝 Текст распознан! Проверяю...")
-                    prompt = f"Проверь мою домашнюю работу:\n\n{extracted_text}"
-                    history = get_history(user_id)
-                    response_text = ask_gigachat(prompt, context=history, mode="check")
-                    send_message(chat_id, response_text)
-                    update_history(user_id, f"Ученик отправил фото ДЗ. Ассистент проверил.")
-                else:
-                    send_message(chat_id, "😔 Не удалось распознать текст. Сделай фото четче или напиши задание текстом.")
-            else:
-                send_message(chat_id, "⚠️ Не удалось получить ссылку на фото.")
-                
-        except Exception as e:
-            print(f"Error photo processing: {e}", flush=True)
-            send_message(chat_id, "⚠️ Ошибка обработки фото. Отправь задание текстом.")
 
 def main():
     init_db()
@@ -197,7 +167,7 @@ def main():
             if updates and "result" in updates:
                 for update in updates["result"]:
                     process_update(update)
-                    offset = update["update_id"] + 1
+                    offset = update.get("update_id", offset) + 1
                     
             time.sleep(1)
         except Exception as e:
