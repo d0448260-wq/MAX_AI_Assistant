@@ -13,7 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OmE0MWExMWZjLWYwYTEtNGM1Ny1hYzY5LTVkOWFkMzA0MTFmMA=="
 
-BASE_URL = "https://botapi.max.ru"
+BASE_URL = "https://platform-api2.max.ru"
 
 def init_db():
     conn = sqlite3.connect('school_assistant.db')
@@ -55,43 +55,35 @@ def get_gigachat_token():
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
         return response.json().get('access_token')
     except Exception as e:
-        print(f"Error GigaChat auth: {e}", flush=True)
+        print(f"Ошибка авторизации GigaChat: {e}", flush=True)
         return None
 
 def ask_gigachat(prompt, context="", mode="explain"):
     token = get_gigachat_token()
     if not token:
-        return "Извините, произошла ошибка подключения к ИИ. Попробуйте позже."
+        return "Извините, произошла ошибка подключения к ИИ."
 
-    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+    url = "https://api.giga.chat/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
     if mode == "explain":
-        system_prompt = (
-            "Ты — дружелюбный ИИ-ассистент для школьников 5-11 классов. "
-            "Твоя задача — объяснять сложные темы простым языком. НИКОГДА не осуждай за незнание. "
-            "Структура ответа: 1. Простое объяснение. 2. Пример. 3. Три тренировочные задачи. "
-            "Используй эмодзи для красоты и форматирование Markdown."
-        )
+        system_prompt = "Ты — дружелюбный ИИ-ассистент для школьников 5-11 классов. Объясняй сложные темы простым языком. НИКОГДА не осуждай за незнание. Структура ответа: 1. Простое объяснение. 2. Пример. 3. Три тренировочные задачи. Используй эмодзи и Markdown."
     else:
-        system_prompt = (
-            "Ты — заботливый учитель. Ученик прислал домашнее задание. "
-            "Твоя задача: найти ошибки (если есть), объяснить ПОЧЕМУ они возникли, как правильно, "
-            "и какое правило нужно повторить. Пиши мягко, без осуждения. Используй Markdown."
-        )
+        system_prompt = "Ты — заботливый учитель. Ученик прислал домашнее задание. Найди ошибки (если есть), объясни ПОЧЕМУ они возникли, как правильно, и какое правило нужно повторить. Пиши мягко. Используй Markdown."
 
     messages = [{"role": "system", "content": system_prompt}]
     if context:
         messages.append({"role": "user", "content": f"Контекст диалога: {context}"})
     messages.append({"role": "user", "content": prompt})
 
-    data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
+    data = {"model": "GigaChat-2", "messages": messages, "temperature": 0.7}
 
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
+        print(f"ОТВЕТ ОТ GIGACHAT: {response.status_code}", flush=True)
         return response.json()['choices'][0]['message']['content']
     except Exception as e:
-        print(f"Error GigaChat request: {e}", flush=True)
+        print(f"Ошибка запроса к GigaChat: {e}", flush=True)
         return "Произошла ошибка при генерации ответа."
 
 def send_message(chat_id, text):
@@ -101,10 +93,9 @@ def send_message(chat_id, text):
     payload = {"text": text}
     try:
         response = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
-        if response.status_code != 200:
-            print(f"Send error: {response.text}", flush=True)
+        print(f"ОТВЕТ ОТ MAX (отправка): {response.status_code} - {response.text}", flush=True)
     except Exception as e:
-        print(f"Error send_message: {e}", flush=True)
+        print(f"Ошибка отправки send_message: {e}", flush=True)
 
 def get_updates(marker=0):
     url = f"{BASE_URL}/updates"
@@ -115,14 +106,17 @@ def get_updates(marker=0):
     try:
         response = requests.get(url, headers=headers, params=params, timeout=35)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            if data.get("updates"):
+                print(f"ПОЛУЧЕНЫ ДАННЫЕ ОТ MAX: {data}", flush=True)
+            return data
         else:
-            print(f"Updates error (Status {response.status_code}): {response.text}", flush=True)
+            print(f"Ошибка Updates (Status {response.status_code}): {response.text}", flush=True)
             return {}
     except requests.exceptions.ReadTimeout:
         pass
     except Exception as e:
-        print(f"Error get_updates: {e}", flush=True)
+        print(f"Ошибка get_updates: {e}", flush=True)
         return {}
 
 def process_update(update):
