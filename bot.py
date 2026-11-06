@@ -11,7 +11,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OmE0MWExMWZjLWYwYTEtNGM1Ny1hYzY5LTVkOWFkMzA0MTFmMA=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
@@ -20,26 +20,87 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
-                        history TEXT,
+                        current_session_id INTEGER,
                         state TEXT
+                      )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        title TEXT,
+                        history TEXT
                       )''')
     conn.commit()
     conn.close()
 
-def get_history(user_id):
+def get_active_session(user_id):
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT history FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT current_session_id FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    
+    if not row or not row[0]:
+        cursor.execute("INSERT INTO sessions (user_id, title, history) VALUES (?, ?, ?)", (user_id, "Чат 1", ""))
+        session_id = cursor.lastrowid
+        cursor.execute("INSERT OR REPLACE INTO users (user_id, current_session_id) VALUES (?, ?)", (user_id, session_id))
+        conn.commit()
+        conn.close()
+        return session_id
+    
+    conn.close()
+    return row[0]
+
+def create_new_session(user_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM sessions WHERE user_id = ?", (user_id,))
+    count = cursor.fetchone()[0]
+    title = f"Чат {count + 1}"
+    
+    cursor.execute("INSERT INTO sessions (user_id, title, history) VALUES (?, ?, ?)", (user_id, title, ""))
+    session_id = cursor.lastrowid
+    cursor.execute("UPDATE users SET current_session_id = ? WHERE user_id = ?", (session_id, user_id))
+    conn.commit()
+    conn.close()
+    return session_id
+
+def switch_session(user_id, session_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+    if cursor.fetchone():
+        cursor.execute("UPDATE users SET current_session_id = ? WHERE user_id = ?", (session_id, user_id))
+        conn.commit()
+        conn.close()
+        return True
+    conn.close()
+    return False
+
+def get_user_sessions(user_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title FROM sessions WHERE user_id = ? ORDER BY id DESC", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def get_history(user_id):
+    session_id = get_active_session(user_id)
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT history FROM sessions WHERE id = ?", (session_id,))
     row = cursor.fetchone()
     conn.close()
-    return row[0] if row else ""
+    return row[0] if row and row[0] else ""
 
 def update_history(user_id, new_message):
+    session_id = get_active_session(user_id)
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
-    history = get_history(user_id)
+    cursor.execute("SELECT history FROM sessions WHERE id = ?", (session_id,))
+    row = cursor.fetchone()
+    history = row[0] if row and row[0] else ""
     history = (history + "\n" + new_message)[-2000:]
-    cursor.execute("INSERT OR REPLACE INTO users (user_id, history) VALUES (?, ?)", (user_id, history))
+    cursor.execute("UPDATE sessions SET history = ? WHERE id = ?", (history, session_id))
     conn.commit()
     conn.close()
 
@@ -92,7 +153,7 @@ def ask_gigachat(prompt, context="", mode="explain"):
 
     messages = [{"role": "system", "content": system_prompt}]
     if context:
-        messages.append({"role": "user", "content": f"Контекст диалога: {context}"})
+        messages.append({"role": "user", "content": f"История нашего диалога: {context}"})
     messages.append({"role": "user", "content": prompt})
 
     data = {"model": "GigaChat-2", "messages": messages, "temperature": 0.7}
@@ -105,34 +166,39 @@ def ask_gigachat(prompt, context="", mode="explain"):
         print(f"Ошибка запроса к GigaChat: {e}", flush=True)
         return "Произошла ошибка при генерации ответа."
 
-def send_message(chat_id, text, with_keyboard=False):
+def get_main_keyboard():
+    return {
+        "type": "inline_keyboard",
+        "payload": {
+            "buttons": [
+                [
+                    {"type": "callback", "text": "➕ Новый чат", "payload": "btn_new_chat"},
+                    {"type": "callback", "text": "📂 Мои чаты", "payload": "btn_list_chats"}
+                ],
+                [
+                    {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"},
+                    {"type": "callback", "text": "📸 Решить задачу с фото", "payload": "btn_solve_photo"}
+                ],
+                [
+                    {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"}
+                ]
+            ]
+        }
+    }
+
+def send_message(chat_id, text, attachments=None):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
     payload = {"text": text}
-
-    if with_keyboard:
-        payload["attachments"] = [
-            {
-                "type": "inline_keyboard",
-                "payload": {
-                    "buttons": [
-                        [
-                            {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"},
-                            {"type": "callback", "text": "📸 Решить задачу с фото", "payload": "btn_solve_photo"}
-                        ],
-                        [
-                            {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"},
-                            {"type": "callback", "text": "ℹ️ Помощь", "payload": "btn_help"}
-                        ]
-                    ]
-                }
-            }
-        ]
+    
+    if not attachments:
+        payload["attachments"] = [get_main_keyboard()]
+    else:
+        payload["attachments"] = attachments
 
     try:
-        response = requests.post(url, headers=headers, params=params, json=payload, timeout=10)
-        print(f"ОТВЕТ ОТ MAX (отправка): {response.status_code} - {response.text}", flush=True)
+        requests.post(url, headers=headers, params=params, json=payload, timeout=10)
     except Exception as e:
         print(f"Ошибка отправки send_message: {e}", flush=True)
 
@@ -145,17 +211,11 @@ def get_updates(marker=0):
     try:
         response = requests.get(url, headers=headers, params=params, timeout=35)
         if response.status_code == 200:
-            data = response.json()
-            if data.get("updates"):
-                print(f"ПОЛУЧЕНЫ ДАННЫЕ ОТ MAX: {data}", flush=True)
-            return data
-        else:
-            print(f"Ошибка Updates (Status {response.status_code}): {response.text}", flush=True)
-            return {}
+            return response.json()
+        return {}
     except requests.exceptions.ReadTimeout:
         pass
-    except Exception as e:
-        print(f"Ошибка get_updates: {e}", flush=True)
+    except Exception:
         return {}
 
 def process_update(update):
@@ -167,8 +227,29 @@ def process_update(update):
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id")
         payload = callback.get("payload")
         
-        if payload == "btn_help":
-            send_message(chat_id, "👋 Я умею: \n1. Объяснять темы.\n2. Решать задачи по фото.\n3. Проверять твои решения.\n\nПросто выбери кнопку или напиши вопрос!", with_keyboard=True)
+        if payload == "btn_new_chat":
+            create_new_session(user_id)
+            send_message(chat_id, "✨ Создан новый чат! Теперь мы общаемся в чистом контексте. Задай свой вопрос.")
+            
+        elif payload == "btn_list_chats":
+            sessions = get_user_sessions(user_id)
+            buttons = []
+            for sess in sessions:
+                buttons.append([{"type": "callback", "text": f"💬 {sess[1]}", "payload": f"switch_{sess[0]}"}])
+            
+            kb = {
+                "type": "inline_keyboard",
+                "payload": {"buttons": buttons}
+            }
+            send_message(chat_id, "Выбери чат, к которому хочешь вернуться:", attachments=[kb])
+            
+        elif payload.startswith("switch_"):
+            session_id = int(payload.split("_")[1])
+            if switch_session(user_id, session_id):
+                send_message(chat_id, f"✅ Переключено на выбранный чат. Продолжаем!")
+            else:
+                send_message(chat_id, "❌ Ошибка: чат не найден.")
+                
         elif payload == "btn_explain":
             send_message(chat_id, "Напиши тему, которую нужно объяснить (например: 'Теорема Пифагора').")
         elif payload == "btn_solve_photo":
@@ -192,9 +273,9 @@ def process_update(update):
         return
     
     if text == "/start" or text == "/help":
-        welcome = "👋 Привет! Я твой персональный ИИ-ассистент. Выбери действие на кнопках ниже или просто напиши свой вопрос!"
-        send_message(chat_id, welcome, with_keyboard=True)
-        set_user_state(user_id, "idle")
+        get_active_session(user_id)
+        welcome = "👋 Привет! Я твой персональный ИИ-ассистент.\n\nТеперь я умею создавать чаты! Нажми «➕ Новый чат», чтобы начать новую тему, или «📂 Мои чаты», чтобы вернуться к старой."
+        send_message(chat_id, welcome)
         return
 
     user_state = get_user_state(user_id)
@@ -213,20 +294,20 @@ def process_update(update):
             extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
             
             if not extracted_text.strip():
-                send_message(chat_id, "😔 Не удалось распознать текст. Попробуй сфотографировать четче или напиши задание текстом.")
+                send_message(chat_id, "😔 Не удалось распознать текст. Попробуй сфотографировать четче.")
                 return
             
-            send_message(chat_id, "✅ Текст распознан. Отправляю ИИ на решение...")
+            send_message(chat_id, "✅ Текст распознан. Отправляю ИИ...")
             
             if user_state == "waiting_for_check_hw":
                 mode = "check"
                 prompt = f"Проверь мою домашнюю работу:\n\n{extracted_text}"
             else:
                 mode = "solve"
-                prompt = f"Реши эту задачу по шагам и объясни:\n\n{extracted_text}"
+                prompt = f"Реши эту задачу по шагам:\n\n{extracted_text}"
             
             response_text = ask_gigachat(prompt, context=get_history(user_id), mode=mode)
-            send_message(chat_id, response_text, with_keyboard=True)
+            send_message(chat_id, response_text)
             update_history(user_id, f"Ученик отправил фото. Ассистент ответил.")
             set_user_state(user_id, "idle")
             
@@ -236,11 +317,11 @@ def process_update(update):
         return
 
     if text:
-        send_message(chat_id, "⏳ Думаю над ответом...")
+        send_message(chat_id, "⏳ Думаю...")
         history = get_history(user_id)
         mode = "check" if user_state == "waiting_for_check_hw" else "explain"
         response_text = ask_gigachat(text, context=history, mode=mode)
-        send_message(chat_id, response_text, with_keyboard=True)
+        send_message(chat_id, response_text)
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
         set_user_state(user_id, "idle")
 
