@@ -1,5 +1,6 @@
 import telebot
 from telebot import apihelper, types
+import telebot.util
 import requests
 import uuid
 import sqlite3
@@ -7,14 +8,15 @@ import io
 from PIL import Image
 import pytesseract
 import urllib3
-import os
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "ВАШ_ТОКЕН")
-GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY", "ВАШ_КЛЮЧ")
+telebot.util.validate_token = lambda token: True
 
-apihelper.API_URL = "https://max.ru/api/v1/bot{0}/{1}" 
+MAX_BOT_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
+GIGACHAT_AUTH_KEY = "sk_2af1ad731243b8e5f04799d4a82c4c59da3c296b3cb6ad8e"
+
+apihelper.API_URL = "https://botapi.max.ru/bot{0}/{1}" 
 bot = telebot.TeleBot(MAX_BOT_TOKEN)
 
 def init_db():
@@ -57,7 +59,7 @@ def get_gigachat_token():
         response = requests.post(url, headers=headers, data=payload, verify=False)
         return response.json().get('access_token')
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error GigaChat auth: {e}")
         return None
 
 def ask_gigachat(prompt, context="", mode="explain"):
@@ -93,7 +95,7 @@ def ask_gigachat(prompt, context="", mode="explain"):
         response = requests.post(url, headers=headers, json=data, verify=False)
         return response.json()['choices'][0]['message']['content']
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error GigaChat request: {e}")
         return "Произошла ошибка при генерации ответа."
 
 def get_main_keyboard():
@@ -176,7 +178,7 @@ def handle_photo(message):
         update_history(user_id, f"Ученик отправил фото ДЗ. Ассистент проверил.")
         
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error photo: {e}")
         bot.edit_message_text(chat_id=user_id, message_id=msg.message_id, text="⚠️ Ошибка обработки фото. Отправь задание текстом.")
 
 @bot.callback_query_handler(func=lambda call: True)
