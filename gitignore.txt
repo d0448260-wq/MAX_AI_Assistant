@@ -1,0 +1,5 @@
+school_assistant.db
+__pycache__/
+*.pyc
+.env
+venv/
