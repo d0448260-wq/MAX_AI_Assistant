@@ -4,91 +4,48 @@ import sqlite3
 import uuid
 import io
 import os
-import re  # Добавили библиотеку для регулярных выражений
+import re
 from PIL import Image
 import pytesseract
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК ИИ-УЧИТЕЛЯ С АВТООЧИСТКОЙ LATEX ===", flush=True)
+print("=== ЗАПУСК БОТА С ОБРАБОТКОЙ КНОПКИ 'НАЧАТЬ' ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI2YWQtOWFlZi03MTMyLWE4YzctMmNkZTkzNGFlY2UyOjQyMmQ2YjU2LTBkMjctNDYwMC04MTlmLTgxMzgxNDY4ZjA2MA=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
 def clean_latex(text):
-    """Убирает LaTeX-разметку и заменяет её на красивые символы"""
-    if not text:
-        return text
-    
-    # Убираем знаки доллара (и двойные, и одинарные)
-    text = text.replace('$$', '')
-    text = text.replace('$', '')
-    
-    # Заменяем популярные команды на символы Юникода
-    text = text.replace('\\times', '×')
-    text = text.replace('\\cdot', '·')
-    text = text.replace('\\approx', '≈')
-    text = text.replace('\\le', '≤')
-    text = text.replace('\\ge', '≥')
-    text = text.replace('\\neq', '≠')
-    text = text.replace('\\pm', '±')
-    
-    # Греческие буквы
-    text = text.replace('\\alpha', 'α')
-    text = text.replace('\\beta', 'β')
-    text = text.replace('\\gamma', 'γ')
-    text = text.replace('\\theta', 'θ')
-    text = text.replace('\\pi', 'π')
-    
-    # Тригонометрия
-    text = text.replace('\\sin', 'sin')
-    text = text.replace('\\cos', 'cos')
-    text = text.replace('\\tan', 'tan')
-    
-    # Дроби: \frac{A}{B} -> (A) / (B)
-    text = re.sub(r'\\frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1) / (\2)', text)
-    
-    # Текстовые блоки: \text{...} -> ...
-    text = re.sub(r'\\text\{([^{}]+)\}', r'\1', text)
-    
-    # Степени
-    text = text.replace('^{2}', '²')
-    text = text.replace('^{3}', '³')
-    text = re.sub(r'\^\{([^{}]+)\}', r'^(\1)', text) 
-    
-    # Индексы
+    if not text: return text
+    text = text.replace('$$', '').replace('$', '')
+    greek = {'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ', 'theta': 'θ', 'lambda': 'λ', 'mu': 'μ', 'pi': 'π', 'rho': 'ρ', 'sigma': 'σ', 'tau': 'τ', 'phi': 'φ', 'omega': 'ω'}
+    for eng, sym in greek.items():
+        text = text.replace(f'\\{eng}', sym)
+        text = re.sub(r'\b' + eng + r'\b', sym, text)
+    text = text.replace('^2', '²').replace('^3', '³')
+    text = re.sub(r'\^\{([^{}]+)\}', r'^\1', text)
     text = re.sub(r'_\{([^{}]+)\}', r'_\1', text)
-    
-    # Убираем лишние слэши перед буквами (если остались)
-    text = text.replace('\\', '')
-    
-    # Убираем странные запятые с пробелами (например, "1000 , \text{кг}")
-    text = text.replace(' , ', ' ')
-    
+    text = re.sub(r'\\?frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1) / (\2)', text)
+    text = re.sub(r'\\frac\s+([a-zA-Z0-9]+)\s+([a-zA-Z0-9]+)', r'(\1) / (\2)', text)
+    symbols = {'times': '×', 'cdot': '·', 'approx': '≈', 'le': '≤', 'ge': '≥', 'neq': '≠', 'pm': '±', 'sqrt': '√', 'infty': '∞', 'sum': 'Σ'}
+    for eng, sym in symbols.items():
+        text = text.replace(f'\\{eng}', sym)
+    text = re.sub(r'\\text\{([^{}]+)\}', r'\1', text)
+    for func in ['sin', 'cos', 'tan', 'log', 'ln']:
+        text = text.replace(f'\\{func}', func)
+    text = text.replace('\\', '').replace('{', '').replace('}', '').replace(' , ', ' ')
     return text
 
 def init_db():
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-                        user_id INTEGER PRIMARY KEY,
-                        chat_id INTEGER,
-                        current_session_id INTEGER,
-                        state TEXT
-                      )''')
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN chat_id INTEGER")
-    except sqlite3.OperationalError:
-        pass
-    cursor.execute('''CREATE TABLE IF NOT EXISTS sessions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER,
-                        title TEXT,
-                        history TEXT
-                      )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, chat_id INTEGER, current_session_id INTEGER, state TEXT)''')
+    try: cursor.execute("ALTER TABLE users ADD COLUMN chat_id INTEGER")
+    except sqlite3.OperationalError: pass
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, title TEXT, history TEXT)''')
     conn.commit()
     conn.close()
 
@@ -197,89 +154,45 @@ def get_user_state(user_id):
 def get_gigachat_token():
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     payload = 'scope=GIGACHAT_API_PERS'
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-        'RqUID': str(uuid.uuid4()),
-        'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'
-    }
+    headers = {'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json', 'RqUID': str(uuid.uuid4()), 'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'}
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
         return response.json().get('access_token')
-    except Exception as e:
-        print(f"Ошибка сети GigaChat: {e}", flush=True)
-        return None
+    except Exception: return None
 
 def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
-    if not token:
-        return "Извините, произошла ошибка авторизации в ИИ."
+    if not token: return "Извините, произошла ошибка авторизации в ИИ."
 
     url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
-    base_instruction = (
-        "ТЫ ДОЛЖЕН СТРОГО СОБЛЮДАТЬ ЭТИ ПРАВИЛА ФОРМАТИРОВАНИЯ:\n"
-        "1. НИКОГДА не используй символы $, $$, \\ и LaTeX-разметку (\\frac, \\cdot, \\sqrt и т.д.).\n"
-        "2. Для степеней используй ЮНИКОД-СИМВОЛЫ: x², x³, y⁴ и т.д. (вместо x^2).\n"
-        "3. Для дробей используй ЮНИКОД: ½, ⅓, ¼, ⅔ (вместо 1/2). Если дроби сложные, пиши через слэш (a/b).\n"
-        "4. Для корня используй символ √ (например, √x).\n"
-        "5. Для умножения используй символ × или ·.\n"
-        "6. Для жирного текста используй *звездочки*.\n"
-        "7. Для курсива используй _подчеркивания_.\n"
-        "8. Заголовки пиши просто с новой строки, выделяя их жирным. НЕ используй решетки (#).\n"
-        "9. Разбивай текст на короткие абзацы для удобства чтения.\n"
-    )
+    base_instruction = "ТЫ ДОЛЖЕН СТРОГО СОБЛЮДАТЬ ЭТИ ПРАВИЛА: 1. Без $ и \\. 2. Степени: x², y³. 3. Дроби: ½ или a/b. 4. Корень: √. 5. Умножение: ×. 6. Жирный: *текст*. 7. Курсив: _текст_. 8. Без решеток для заголовков.\n"
     
-    if mode == "chat":
-        system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель для школьников 5-11 классов. Твоя цель — вести с учеником естественную беседу, отвечать на его вопросы по учебе. Поддерживай диалог, будь вежливым, мотивирующим и используй эмодзи."
-    elif mode == "explain":
-        system_prompt = base_instruction + "Ты — дружелюбный ИИ-учитель. Объясни тему, которую спросил ученик, простым языком. НИКОГДА не осуждай за незнание. Структура ответа: 1. Простое объяснение. 2. Пример. 3. Три тренировочные задачи."
-    elif mode == "solve":
-        system_prompt = base_instruction + "Ты — отличный репетитор. Ученик прислал задачу (распознанную с фото). Реши её по шагам. Объясни каждое действие. Дай итоговый ответ."
-    else: # check
-        system_prompt = base_instruction + "Ты — заботливый учитель. Ученик прислал домашнее задание. Найди ошибки (если есть), объясни ПОЧЕМУ они возникли, как правильно, и какое правило нужно повторить. Пиши мягко."
+    if mode == "chat": system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель. Веди естественную беседу."
+    elif mode == "explain": system_prompt = base_instruction + "Ты — ИИ-учитель. Объясни тему просто, дай пример и 3 задачи."
+    elif mode == "solve": system_prompt = base_instruction + "Ты — репетитор. Реши задачу по шагам."
+    else: system_prompt = base_instruction + "Ты — учитель. Найди ошибки в ДЗ и объясни их."
 
     messages = [{"role": "system", "content": system_prompt}]
-    if context:
-        messages.append({"role": "user", "content": f"История нашего диалога: {context}"})
+    if context: messages.append({"role": "user", "content": f"История: {context}"})
     messages.append({"role": "user", "content": prompt})
 
     data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
-
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
-        res_json = response.json()
-        
-        if response.status_code != 200:
-            return f"Ошибка ИИ: {res_json.get('message', 'Неизвестная ошибка')}"
-            
-        raw_text = res_json['choices'][0]['message']['content']
-        # ОЧИЩАЕМ ТЕКСТ ОТ LATEX ПЕРЕД ОТПРАВКОЙ
-        clean_text = clean_latex(raw_text)
-        
-        return clean_text
-    except Exception as e:
-        print(f"Ошибка парсинга GigaChat: {e}", flush=True)
-        return "Произошла ошибка при генерации ответа."
+        if response.status_code != 200: return f"Ошибка ИИ."
+        return clean_latex(response.json()['choices'][0]['message']['content'])
+    except Exception: return "Ошибка при генерации ответа."
 
 def get_main_keyboard():
     return {
         "type": "inline_keyboard",
         "payload": {
             "buttons": [
-                [
-                    {"type": "callback", "text": "💬 Поговорить с ИИ", "payload": "btn_chat_teacher"},
-                    {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"}
-                ],
-                [
-                    {"type": "callback", "text": "📸 Решить задачу", "payload": "btn_solve_photo"},
-                    {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"}
-                ],
-                [
-                    {"type": "callback", "text": "➕ Новый чат", "payload": "btn_new_chat"},
-                    {"type": "callback", "text": "📂 Мои чаты", "payload": "btn_list_chats"}
-                ]
+                [{"type": "callback", "text": "💬 Поговорить с ИИ", "payload": "btn_chat_teacher"}, {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"}],
+                [{"type": "callback", "text": "📸 Решить задачу", "payload": "btn_solve_photo"}, {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"}],
+                [{"type": "callback", "text": "➕ Новый чат", "payload": "btn_new_chat"}, {"type": "callback", "text": "📂 Мои чаты", "payload": "btn_list_chats"}]
             ]
         }
     }
@@ -289,74 +202,66 @@ def send_message(chat_id, text, show_keyboard=False):
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
     payload = {"text": text, "format": "markdown"}
-    
-    if show_keyboard:
-        payload["attachments"] = [get_main_keyboard()]
-
-    try:
-        response = requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
-        if response.status_code != 200:
-            print(f"ОШИБКА ОТПРАВКИ MAX ({chat_id}): {response.status_code} - {response.text}", flush=True)
-    except Exception as e:
-        print(f"Ошибка сети при отправке: {e}", flush=True)
+    if show_keyboard: payload["attachments"] = [get_main_keyboard()]
+    try: requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
+    except Exception as e: print(f"Ошибка отправки: {e}", flush=True)
 
 def get_updates(marker=0):
     url = f"{BASE_URL}/updates"
     headers = {"Authorization": MAX_TOKEN}
     params = {"timeout": 30, "limit": 100}
-    if marker:
-        params["marker"] = marker
+    if marker: params["marker"] = marker
     try:
         response = requests.get(url, headers=headers, params=params, timeout=35, verify=False)
-        if response.status_code == 200:
-            return response.json()
-        return {}
-    except requests.exceptions.ReadTimeout:
-        pass
-    except Exception:
-        return {}
+        return response.json() if response.status_code == 200 else {}
+    except Exception: return {}
 
 def process_update(update):
     update_type = update.get("update_type")
     
+    # ОБРАБОТКА НАЖАТИЯ КНОПКИ "НАЧАТЬ"
+    if update_type == "bot_started":
+        chat_id = update.get("chat_id")
+        user_id = update.get("user", {}).get("user_id")
+        if chat_id and user_id:
+            save_user_chat(user_id, chat_id)
+            get_active_session(user_id)
+            set_user_state(user_id, "idle")
+            welcome = "👋 Привет! Я твой личный онлайн-учитель.\n\nВыбери нужный режим на кнопках ниже или просто напиши мне, если хочешь поболтать!"
+            send_message(chat_id, welcome, show_keyboard=True)
+        return
+        
     if update_type == "message_callback":
         callback = update.get("callback", {})
         user_id = callback.get("user", {}).get("user_id")
-        chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id")
-        if not chat_id:
-            chat_id = get_user_chat(user_id)
-            
+        chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id") or get_user_chat(user_id)
         payload = callback.get("payload")
         
         if payload == "btn_chat_teacher":
             set_user_state(user_id, "chatting_with_teacher")
-            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.* Задавай любые вопросы, и мы все разберем в формате живого диалога. О чем хочешь поговорить?")
+            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.* Задавай любые вопросы. О чем хочешь поговорить?")
         elif payload == "btn_new_chat":
             create_new_session(user_id)
-            send_message(chat_id, "✨ Создан новый чат! Теперь мы общаемся в чистом контексте. Задай свой вопрос.")
+            send_message(chat_id, "✨ Создан новый чат! Задай свой вопрос.")
         elif payload == "btn_list_chats":
             sessions = get_user_sessions(user_id)
             buttons = [[{"type": "callback", "text": f"💬 {sess[1]}", "payload": f"switch_{sess[0]}"}] for sess in sessions]
-            send_message(chat_id, "Выбери чат, к которому хочешь вернуться:", attachments=[{"type": "inline_keyboard", "payload": {"buttons": buttons}}])
+            send_message(chat_id, "Выбери чат:", attachments=[{"type": "inline_keyboard", "payload": {"buttons": buttons}}])
         elif payload.startswith("switch_"):
-            session_id = int(payload.split("_")[1])
-            if switch_session(user_id, session_id):
-                send_message(chat_id, "✅ Переключено на выбранный чат. Продолжаем!")
-            else:
-                send_message(chat_id, "❌ Ошибка: чат не найден.")
+            if switch_session(user_id, int(payload.split("_")[1])): send_message(chat_id, "✅ Переключено!")
+            else: send_message(chat_id, "❌ Ошибка.")
         elif payload == "btn_explain":
             set_user_state(user_id, "waiting_for_explanation")
-            send_message(chat_id, "📚 Напиши тему, которую нужно объяснить (например: 'Теорема Пифагора').")
+            send_message(chat_id, "📚 Напиши тему, которую нужно объяснить.")
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
-            send_message(chat_id, "📸 Отправь мне фото с задачей, и я решу её с подробным объяснением!")
+            send_message(chat_id, "📸 Отправь фото с задачей.")
         elif payload == "btn_check_hw":
             set_user_state(user_id, "waiting_for_check_hw")
-            send_message(chat_id, "📝 Отправь фото или текст своего решения, и я проверю его без осуждения.")
+            send_message(chat_id, "📝 Отправь фото или текст решения.")
         return
 
-    if update_type != "message_created":
-        return
+    if update_type != "message_created": return
 
     message = update.get("message", {})
     chat_id = message.get("recipient", {}).get("chat_id")
@@ -364,11 +269,10 @@ def process_update(update):
     text = message.get("body", {}).get("text", "")
     attachments = message.get("body", {}).get("attachments", [])
 
-    if not chat_id or not user_id:
-        return
-    
+    if not chat_id or not user_id: return
     save_user_chat(user_id, chat_id)
     
+    # Обработка /start (на случай, если пришел текстом)
     if text == "/start" or text == "/help":
         get_active_session(user_id)
         set_user_state(user_id, "idle")
@@ -377,63 +281,39 @@ def process_update(update):
         return
 
     user_state = get_user_state(user_id)
-    image_url = None
-
-    for att in attachments:
-        if att.get("type") == "image":
-            image_url = att.get("payload", {}).get("url")
-            break
+    image_url = next((att.get("payload", {}).get("url") for att in attachments if att.get("type") == "image"), None)
 
     if image_url:
-        send_message(chat_id, "📸 Фото получено! Распознаю текст...")
+        send_message(chat_id, "📸 Фото получено! Распознаю...")
         try:
             img_resp = requests.get(image_url, timeout=15, verify=False)
             image = Image.open(io.BytesIO(img_resp.content))
             extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
             
             if not extracted_text.strip():
-                send_message(chat_id, "😔 Не удалось распознать текст. Попробуй сфотографировать четче.")
+                send_message(chat_id, "😔 Текст не распознан.")
                 return
             
             send_message(chat_id, "✅ Текст распознан. Отправляю ИИ...")
-            
-            if user_state == "waiting_for_check_hw":
-                mode = "check"
-                prompt = f"Проверь мою домашнюю работу:\n\n{extracted_text}"
-            else:
-                mode = "solve"
-                prompt = f"Реши эту задачу по шагам:\n\n{extracted_text}"
-            
-            response_text = ask_gigachat(prompt, context=get_history(user_id), mode=mode)
+            mode = "check" if user_state == "waiting_for_check_hw" else "solve"
+            response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context=get_history(user_id), mode=mode)
             send_message(chat_id, response_text, show_keyboard=True)
-            update_history(user_id, f"Ученик отправил фото. Ассистент ответил.")
+            update_history(user_id, "Фото решено.")
             set_user_state(user_id, "idle")
-        except Exception as e:
-            print(f"Ошибка обработки фото: {e}", flush=True)
-            send_message(chat_id, "⚠️ Ошибка при обработке фото.")
+        except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.")
         return
 
     if text:
         send_message(chat_id, "⏳ Думаю...")
-        history = get_history(user_id)
-        
-        if user_state == "waiting_for_explanation":
-            mode = "explain"
-        elif user_state == "waiting_for_check_hw":
-            mode = "check"
-        else:
-            mode = "chat"
-        
-        response_text = ask_gigachat(text, context=history, mode=mode)
+        mode = "explain" if user_state == "waiting_for_explanation" else ("check" if user_state == "waiting_for_check_hw" else "chat")
+        response_text = ask_gigachat(text, context=get_history(user_id), mode=mode)
         send_message(chat_id, response_text, show_keyboard=True)
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
-        
-        if user_state in ["waiting_for_explanation", "waiting_for_check_hw"]:
-            set_user_state(user_id, "idle")
+        if user_state in ["waiting_for_explanation", "waiting_for_check_hw"]: set_user_state(user_id, "idle")
 
 def main():
     init_db()
-    print("Бот запущен и слушает сообщения...", flush=True)
+    print("Бот запущен...", flush=True)
     marker = 0
     while True:
         try:
@@ -443,9 +323,6 @@ def main():
                     process_update(update)
                     marker = update.get("timestamp", marker) 
             time.sleep(1)
-        except Exception as e:
-            print(f"Критическая ошибка: {e}", flush=True)
-            time.sleep(5)
+        except Exception: time.sleep(5)
 
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__': main()
