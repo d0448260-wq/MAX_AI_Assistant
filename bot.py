@@ -5,13 +5,14 @@ import uuid
 import io
 import os
 import re
+import threading
 from PIL import Image
 import pytesseract
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С ИСПРАВЛЕННЫМ УДАЛЕНИЕМ (message_id) ===", flush=True)
+print("=== ЗАПУСК БОТА С УДАЛЕНИЕМ СЕССИЙ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "MDFhMWI3NzItZThlZS03ZmEzLTlmMDktZGU0YTBlOWIzZTk5OmI2ZDljZjgwLTM2YTQtNDQ1ZS04OWU3LTQ2MmIxYjQ4YmU2MQ=="
@@ -28,26 +29,21 @@ def clean_latex(text):
     text = text.replace('Delta', 'Δ').replace('quad', ' ')
     text = re.sub(r'fracdvecvdt', '(dv)/(dt)', text)
     text = re.sub(r'frac([a-zA-Z0-9]+)([a-zA-Z0-9]+)', r'(\1)/(\2)', text)
-    
     greek = {'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ', 'theta': 'θ', 'lambda': 'λ', 'mu': 'μ', 'pi': 'π', 'rho': 'ρ', 'sigma': 'σ', 'tau': 'τ', 'phi': 'φ', 'omega': 'ω'}
     for eng, sym in greek.items():
         text = text.replace(f'\\{eng}', sym)
         text = re.sub(r'\b' + eng + r'\b', sym, text)
-        
     text = text.replace('^2', '²').replace('^3', '³')
     text = re.sub(r'\^\{([^{}]+)\}', r'^\1', text)
     text = re.sub(r'_\{([^{}]+)\}', r'_\1', text)
     text = re.sub(r'\\?frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1) / (\2)', text)
     text = re.sub(r'\\frac\s+([a-zA-Z0-9]+)\s+([a-zA-Z0-9]+)', r'(\1) / (\2)', text)
-    
     symbols = {'times': '×', 'cdot': '·', 'approx': '≈', 'le': '≤', 'ge': '≥', 'neq': '≠', 'pm': '±', 'sqrt': '√', 'infty': '∞', 'sum': 'Σ'}
     for eng, sym in symbols.items():
         text = text.replace(f'\\{eng}', sym)
-        
     text = re.sub(r'\\text\{([^{}]+)\}', r'\1', text)
     for func in ['sin', 'cos', 'tan', 'log', 'ln']:
         text = text.replace(f'\\{func}', func)
-        
     text = text.replace('\\', '').replace('{', '').replace('}', '').replace(' , ', ' ')
     return text
 
@@ -59,13 +55,13 @@ def init_db():
                         chat_id INTEGER,
                         state TEXT,
                         history TEXT,
-                        last_mid TEXT
+                        session_mids TEXT
                       )''')
     try: cursor.execute("ALTER TABLE users ADD COLUMN chat_id INTEGER")
     except sqlite3.OperationalError: pass
     try: cursor.execute("ALTER TABLE users ADD COLUMN history TEXT")
     except sqlite3.OperationalError: pass
-    try: cursor.execute("ALTER TABLE users ADD COLUMN last_mid TEXT")
+    try: cursor.execute("ALTER TABLE users ADD COLUMN session_mids TEXT")
     except sqlite3.OperationalError: pass
     conn.commit()
     conn.close()
@@ -86,36 +82,49 @@ def get_user_chat(user_id):
     conn.close()
     return row[0] if row and row[0] else user_id
 
-def get_last_mid(user_id):
-    conn = sqlite3.connect('school_assistant.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT last_mid FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row and row[0] else None
-
-def save_last_mid(user_id, mid):
+def add_session_mid(user_id, mid):
+    if not mid: return
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    cursor.execute("UPDATE users SET last_mid = ? WHERE user_id = ?", (mid, user_id))
+    cursor.execute("SELECT session_mids FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    mids = row[0].split(",") if row and row[0] else []
+    if mid not in mids:
+        mids.append(mid)
+        cursor.execute("UPDATE users SET session_mids = ? WHERE user_id = ?", (",".join(mids), user_id))
     conn.commit()
     conn.close()
 
+def get_and_clear_session_mids(user_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT session_mids FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    mids = row[0].split(",") if row and row[0] else []
+    cursor.execute("UPDATE users SET session_mids = '' WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return mids
+
 def delete_message(chat_id, message_id):
-    """Удаляет сообщение. Используем message_id (в единственном числе)"""
     if not message_id: return
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
-    params = {"chat_id": chat_id, "message_id": message_id}  # <--- ИСПРАВЛЕНО ЗДЕСЬ
+    params = {"chat_id": chat_id, "message_id": message_id}
     try:
-        response = requests.delete(url, headers=headers, params=params, verify=False, timeout=10)
-        if response.status_code == 200:
-            print(f"🗑️ Сообщение {message_id} удалено.", flush=True)
-        else:
-            print(f"⚠️ Не удалось удалить {message_id}. Ответ API: {response.status_code} - {response.text}", flush=True)
+        response = requests.delete(url, headers=headers, params=params, verify=False, timeout=5)
+        if response.status_code != 200:
+            print(f"⚠️ Не удалось удалить {message_id}: {response.text}", flush=True)
     except Exception as e:
-        print(f"⚠️ Ошибка при удалении: {e}", flush=True)
+        pass
+
+def wipe_session(user_id, chat_id):
+    """Удаляет сообщения текущей сессии (вопрос + ответ)"""
+    mids = get_and_clear_session_mids(user_id)
+    for mid in mids:
+        if mid.strip():
+            delete_message(chat_id, mid)
 
 def get_history(user_id):
     conn = sqlite3.connect('school_assistant.db')
@@ -165,7 +174,6 @@ def get_gigachat_token():
     if cached_gigachat_token and time.time() < token_expiry_time:
         return cached_gigachat_token
 
-    print("🔄 Запрашиваю новый токен GigaChat...", flush=True)
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     payload = 'scope=GIGACHAT_API_PERS'
     headers = {
@@ -175,56 +183,46 @@ def get_gigachat_token():
         'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'
     }
     try:
-        response = requests.post(url, headers=headers, data=payload, verify=False, timeout=30)
+        response = requests.post(url, headers=headers, data=payload, verify=False, timeout=20)
         if response.status_code == 200:
             cached_gigachat_token = response.json().get('access_token')
             token_expiry_time = time.time() + 1500 
-            print("✅ Токен успешно получен.", flush=True)
             return cached_gigachat_token
-        else:
-            print(f"❌ ОШИБКА АВТОРИЗАЦИИ ({response.status_code}): {response.text}", flush=True)
-            return None
-    except Exception as e:
-        print(f"❌ Ошибка сети: {e}", flush=True)
+        return None
+    except Exception:
         return None
 
 def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
-    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ."
+    if not token: return "⚠️ Ошибка авторизации в ИИ."
 
     url = "https://api.giga.chat/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
     base_instruction = (
-        "ТЫ ДОЛЖЕН СТРОГО СОБЛЮДАТЬ ЭТИ ПРАВИЛА ФОРМАТИРОВАНИЯ:\n"
-        "1. НИКОГДА не используй $, $$, \\ и LaTeX (\\frac, \\cdot и т.д.).\n"
-        "2. Степени: x², y³. Дроби: ½ или a/b. Корень: √. Векторы пиши просто буквами (F, a).\n"
-        "3. Для жирного текста используй *звездочки*.\n"
-        "4. Делай текст структурированным: абзацы, списки.\n"
-        "5. Не пиши сплошным текстом. Используй эмодзи.\n"
+        "ПРАВИЛА: 1. НИКАКОГО LaTeX ($, \\). 2. Степени: x². 3. Дроби: a/b. 4. Корень: √. "
+        "5. Жирный: *текст*. 6. Списки: •. 7. Не пиши сплошным текстом. 8. Используй эмодзи."
     )
     
-    if mode == "chat": system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель. Отвечай на вопрос ученика."
-    elif mode == "explain": system_prompt = base_instruction + "Ты — ИИ-учитель. Объясни тему просто."
-    elif mode == "solve": system_prompt = base_instruction + "Ты — репетитор. Реши задачу по шагам (Шаг 1, Шаг 2...)."
-    else: system_prompt = base_instruction + "Ты — учитель. Найди ошибки в ДЗ и объясни их."
+    if mode == "chat": system_prompt = base_instruction + " Ты — учитель. Отвечай коротко и по делу."
+    elif mode == "explain": system_prompt = base_instruction + " Ты — учитель. Объясни тему просто и кратко."
+    elif mode == "solve": system_prompt = base_instruction + " Ты — репетитор. Реши задачу по шагам."
+    else: system_prompt = base_instruction + " Ты — учитель. Найди ошибки и объясни их."
 
     messages = [{"role": "system", "content": system_prompt}]
-    if context: messages.append({"role": "system", "content": f"История прошлых сообщений (для контекста): {context}"})
+    if context: messages.append({"role": "system", "content": f"Контекст: {context}"})
     messages.append({"role": "user", "content": prompt})
 
-    data = {"model": "GigaChat-2", "messages": messages, "temperature": 0.7}
+    data = {"model": "GigaChat", "messages": messages, "temperature": 0.6}
     
     try:
-        response = requests.post(url, headers=headers, json=data, verify=False, timeout=40)
+        response = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
         if response.status_code != 200:
-            print(f"❌ ОШИБКА API ({response.status_code}): {response.text}", flush=True)
             return "⚠️ Ошибка ИИ при генерации."
             
         return clean_latex(response.json()['choices'][0]['message']['content'])
-    except Exception as e:
-        print(f"❌ Ошибка парсинга: {e}", flush=True)
-        return "⚠️ Ошибка при генерации ответа."
+    except Exception:
+        return "⚠️ Превышено время ожидания ответа от ИИ. Попробуйте еще раз."
 
 def get_main_keyboard():
     return {
@@ -253,12 +251,7 @@ def get_single_back_keyboard():
         }
     }
 
-def send_message(user_id, chat_id, text, keyboard_type="single", clean_previous=True):
-    if clean_previous:
-        old_mid = get_last_mid(user_id)
-        if old_mid:
-            delete_message(chat_id, old_mid)
-
+def send_message(user_id, chat_id, text, keyboard_type="single", track_session=False):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
@@ -274,12 +267,11 @@ def send_message(user_id, chat_id, text, keyboard_type="single", clean_previous=
         if response.status_code == 200:
             res_json = response.json()
             mid = res_json.get("message", {}).get("body", {}).get("mid")
-            if mid:
-                save_last_mid(user_id, mid)
-        else:
-            print(f"ОШИБКА ОТПРАВКИ MAX: {response.text}", flush=True)
-    except Exception as e:
-        print(f"Ошибка отправки: {e}", flush=True)
+            # Если track_session=True, сохраняем ID для будущего удаления
+            if mid and track_session:
+                add_session_mid(user_id, mid)
+    except Exception:
+        pass
 
 def get_updates(marker=0):
     url = f"{BASE_URL}/updates"
@@ -303,10 +295,9 @@ def process_update(update):
             clear_history(user_id)
             welcome = (
                 "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
-                "Я помогу тебе разобраться в сложных темах, проверю домашку или решу задачу по фото.\n\n"
                 "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
             )
-            send_message(user_id, chat_id, welcome, keyboard_type="main", clean_previous=True)
+            send_message(user_id, chat_id, welcome, keyboard_type="main", track_session=False)
         return
         
     if update_type == "message_callback":
@@ -315,30 +306,34 @@ def process_update(update):
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id") or get_user_chat(user_id)
         payload = callback.get("payload")
         
+        # 1. Удаляем сообщение, на котором нажали кнопку (чтобы меню не висело)
         clicked_mid = callback.get("message", {}).get("body", {}).get("mid")
         if clicked_mid:
-            delete_message(chat_id, clicked_mid)
+            threading.Thread(target=delete_message, args=(chat_id, clicked_mid)).start()
+        
+        # 2. Удаляем всю сессию (твой вопрос и его ответ)
+        threading.Thread(target=wipe_session, args=(user_id, chat_id)).start()
         
         if payload == "btn_main_menu":
             set_user_state(user_id, "idle")
             clear_history(user_id)
-            send_message(user_id, chat_id, "🏠 *Главное меню.* Чем еще я могу помочь?", keyboard_type="main", clean_previous=True)
+            send_message(user_id, chat_id, "🏠 *Главное меню.* Чем еще я могу помочь?", keyboard_type="main", track_session=False)
         elif payload == "btn_chat_teacher":
             set_user_state(user_id, "chatting_with_teacher")
             clear_history(user_id)
-            send_message(user_id, chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы. Чтобы выйти, нажми кнопку внизу.", keyboard_type="single", clean_previous=True)
+            send_message(user_id, chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы. Чтобы выйти, нажми кнопку внизу.", keyboard_type="single", track_session=False)
         elif payload == "btn_explain":
             set_user_state(user_id, "waiting_for_explanation")
             clear_history(user_id) 
-            send_message(user_id, chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_).", keyboard_type="single", clean_previous=True)
+            send_message(user_id, chat_id, "📚 *Напиши тему*, которую нужно объяснить.", keyboard_type="single", track_session=False)
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
             clear_history(user_id) 
-            send_message(user_id, chat_id, "📸 *Отправь мне фото с задачей*, и я решу её по шагам!", keyboard_type="single", clean_previous=True)
+            send_message(user_id, chat_id, "📸 *Отправь мне фото с задачей*.", keyboard_type="single", track_session=False)
         elif payload == "btn_check_hw":
             set_user_state(user_id, "waiting_for_check_hw")
             clear_history(user_id) 
-            send_message(user_id, chat_id, "📝 *Отправь фото или текст решения*, и я проверю его.", keyboard_type="single", clean_previous=True)
+            send_message(user_id, chat_id, "📝 *Отправь фото или текст решения*.", keyboard_type="single", track_session=False)
         return
 
     if update_type != "message_created": return
@@ -348,46 +343,53 @@ def process_update(update):
     user_id = message.get("sender", {}).get("user_id")
     text = message.get("body", {}).get("text", "")
     attachments = message.get("body", {}).get("attachments", [])
+    user_mid = message.get("body", {}).get("mid")
 
     if not chat_id or not user_id: return
     save_user_chat(user_id, chat_id)
     
+    # Сохраняем ID твоего сообщения, чтобы потом его удалить
+    if user_mid:
+        add_session_mid(user_id, user_mid)
+    
     if text in ["/start", "/help"]:
         set_user_state(user_id, "idle")
         clear_history(user_id)
+        threading.Thread(target=wipe_session, args=(user_id, chat_id)).start()
         welcome = (
             "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
             "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
         )
-        send_message(user_id, chat_id, welcome, keyboard_type="main", clean_previous=True)
+        send_message(user_id, chat_id, welcome, keyboard_type="main", track_session=False)
         return
 
     user_state = get_user_state(user_id)
     image_url = next((att.get("payload", {}).get("url") for att in attachments if att.get("type") == "image"), None)
 
     if image_url:
-        send_message(user_id, chat_id, "📸 *Фото получено! Распознаю текст...*", keyboard_type="none", clean_previous=True)
+        send_message(user_id, chat_id, "📸 *Распознаю текст...*", keyboard_type="none", track_session=False)
         try:
             img_resp = requests.get(image_url, timeout=15, verify=False)
             image = Image.open(io.BytesIO(img_resp.content))
             extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
             
             if not extracted_text.strip():
-                send_message(user_id, chat_id, "😔 *Не удалось распознать текст.* Попробуй сфотографировать четче.", keyboard_type="single")
+                send_message(user_id, chat_id, "😔 *Не удалось распознать текст.*", keyboard_type="single", track_session=True)
                 return
             
-            send_message(user_id, chat_id, "✅ *Текст распознан. Отправляю ИИ...*", keyboard_type="none", clean_previous=True)
+            send_message(user_id, chat_id, "⏳ *Решаю задачу...*", keyboard_type="none", track_session=False)
             mode = "check" if user_state == "waiting_for_check_hw" else "solve"
             response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context="", mode=mode)
             
-            send_message(user_id, chat_id, response_text, keyboard_type="single", clean_previous=True)
+            # Сохраняем финальный ответ в сессию для удаления
+            send_message(user_id, chat_id, response_text, keyboard_type="single", track_session=True)
             clear_history(user_id)
             set_user_state(user_id, "idle")
-        except Exception: send_message(user_id, chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="single")
+        except Exception: send_message(user_id, chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="single", track_session=True)
         return
 
     if text:
-        send_message(user_id, chat_id, "⏳ *Думаю над ответом...*", keyboard_type="none", clean_previous=True)
+        send_message(user_id, chat_id, "⏳ *Думаю...*", keyboard_type="none", track_session=False)
         
         if user_state == "chatting_with_teacher":
             mode = "chat"
@@ -405,7 +407,9 @@ def process_update(update):
             context = "" 
 
         response_text = ask_gigachat(text, context=context, mode=mode)
-        send_message(user_id, chat_id, response_text, keyboard_type="single", clean_previous=True)
+        
+        # Сохраняем финальный ответ в сессию
+        send_message(user_id, chat_id, response_text, keyboard_type="single", track_session=True)
         
         if mode == "chat":
             update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
@@ -423,7 +427,8 @@ def main():
                 for update in updates_data["updates"]:
                     process_update(update)
                     marker = update.get("timestamp", marker) 
-            time.sleep(1)
-        except Exception: time.sleep(5)
+            time.sleep(0.2)
+        except Exception:
+            time.sleep(2)
 
 if __name__ == '__main__': main()
