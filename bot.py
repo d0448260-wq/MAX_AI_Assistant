@@ -15,7 +15,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 print("=== ЗАПУСК БОТА (ОТКАТ К СТАБИЛЬНОЙ ВЕРСИИ) ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI3NzItZThlZS03ZmEzLTlmMDktZGU0YTBlOWIzZTk5OmI2ZDljZjgwLTM2YTQtNDQ1ZS04OWU3LTQ2MmIxYjQ4YmU2MQ=="
+GIGACHAT_AUTH_KEY = "MDFhMWI3ZjMtYTM3Mi03NmIwLWJkYjktNjM1YWI1YTY0OWYzOjBlYTFjNjk0LTQzN2UtNGQ3MC1iYTZiLWU0YWQyZWNmMWI4ZA=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
