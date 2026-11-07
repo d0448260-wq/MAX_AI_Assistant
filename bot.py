@@ -11,10 +11,10 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С ОБРАБОТКОЙ КНОПКИ 'НАЧАТЬ' ===", flush=True)
+print("=== ЗАПУСК БОТА БЕЗ СИСТЕМЫ ЧАТОВ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI2YWQtOWFlZi03MTMyLWE4YzctMmNkZTkzNGFlY2UyOjQyMmQ2YjU2LTBkMjctNDYwMC04MTlmLTgxMzgxNDY4ZjA2MA=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
@@ -42,10 +42,16 @@ def clean_latex(text):
 def init_db():
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, chat_id INTEGER, current_session_id INTEGER, state TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+                        user_id INTEGER PRIMARY KEY,
+                        chat_id INTEGER,
+                        state TEXT,
+                        history TEXT
+                      )''')
     try: cursor.execute("ALTER TABLE users ADD COLUMN chat_id INTEGER")
     except sqlite3.OperationalError: pass
-    cursor.execute('''CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, title TEXT, history TEXT)''')
+    try: cursor.execute("ALTER TABLE users ADD COLUMN history TEXT")
+    except sqlite3.OperationalError: pass
     conn.commit()
     conn.close()
 
@@ -65,73 +71,23 @@ def get_user_chat(user_id):
     conn.close()
     return row[0] if row and row[0] else user_id
 
-def get_active_session(user_id):
-    conn = sqlite3.connect('school_assistant.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT current_session_id FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if not row or not row[0]:
-        cursor.execute("INSERT INTO sessions (user_id, title, history) VALUES (?, ?, ?)", (user_id, "Чат 1", ""))
-        session_id = cursor.lastrowid
-        cursor.execute("INSERT OR IGNORE INTO users (user_id, current_session_id) VALUES (?, ?)", (user_id, session_id))
-        cursor.execute("UPDATE users SET current_session_id = ? WHERE user_id = ?", (session_id, user_id))
-        conn.commit()
-        conn.close()
-        return session_id
-    conn.close()
-    return row[0]
-
-def create_new_session(user_id):
-    conn = sqlite3.connect('school_assistant.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM sessions WHERE user_id = ?", (user_id,))
-    count = cursor.fetchone()[0]
-    title = f"Чат {count + 1}"
-    cursor.execute("INSERT INTO sessions (user_id, title, history) VALUES (?, ?, ?)", (user_id, title, ""))
-    session_id = cursor.lastrowid
-    cursor.execute("UPDATE users SET current_session_id = ? WHERE user_id = ?", (session_id, user_id))
-    conn.commit()
-    conn.close()
-    return session_id
-
-def switch_session(user_id, session_id):
-    conn = sqlite3.connect('school_assistant.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
-    if cursor.fetchone():
-        cursor.execute("UPDATE users SET current_session_id = ? WHERE user_id = ?", (session_id, user_id))
-        conn.commit()
-        conn.close()
-        return True
-    conn.close()
-    return False
-
-def get_user_sessions(user_id):
-    conn = sqlite3.connect('school_assistant.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, title FROM sessions WHERE user_id = ? ORDER BY id DESC", (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
-
 def get_history(user_id):
-    session_id = get_active_session(user_id)
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT history FROM sessions WHERE id = ?", (session_id,))
+    cursor.execute("SELECT history FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return row[0] if row and row[0] else ""
 
 def update_history(user_id, new_message):
-    session_id = get_active_session(user_id)
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT history FROM sessions WHERE id = ?", (session_id,))
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cursor.execute("SELECT history FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     history = row[0] if row and row[0] else ""
     history = (history + "\n" + new_message)[-4000:]
-    cursor.execute("UPDATE sessions SET history = ? WHERE id = ?", (history, session_id))
+    cursor.execute("UPDATE users SET history = ? WHERE user_id = ?", (history, user_id))
     conn.commit()
     conn.close()
 
@@ -162,17 +118,25 @@ def get_gigachat_token():
 
 def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
-    if not token: return "Извините, произошла ошибка авторизации в ИИ."
+    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ."
 
     url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
-    base_instruction = "ТЫ ДОЛЖЕН СТРОГО СОБЛЮДАТЬ ЭТИ ПРАВИЛА: 1. Без $ и \\. 2. Степени: x², y³. 3. Дроби: ½ или a/b. 4. Корень: √. 5. Умножение: ×. 6. Жирный: *текст*. 7. Курсив: _текст_. 8. Без решеток для заголовков.\n"
+    base_instruction = (
+        "ТЫ ДОЛЖЕН СТРОГО СОБЛЮДАТЬ ЭТИ ПРАВИЛА ФОРМАТИРОВАНИЯ:\n"
+        "1. НИКОГДА не используй $, $$, \\ и LaTeX (\\frac, \\cdot и т.д.).\n"
+        "2. Степени: x², y³. Дроби: ½ или a/b. Корень: √.\n"
+        "3. Для жирного текста используй *звездочки*.\n"
+        "4. Для списков используй маркеры (•) или цифры (1., 2.).\n"
+        "5. Делай текст структурированным: абзацы, списки, *выделение главного*.\n"
+        "6. Не пиши сплошным текстом (стеной). Используй эмодзи для акцентов.\n"
+    )
     
-    if mode == "chat": system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель. Веди естественную беседу."
-    elif mode == "explain": system_prompt = base_instruction + "Ты — ИИ-учитель. Объясни тему просто, дай пример и 3 задачи."
-    elif mode == "solve": system_prompt = base_instruction + "Ты — репетитор. Реши задачу по шагам."
-    else: system_prompt = base_instruction + "Ты — учитель. Найди ошибки в ДЗ и объясни их."
+    if mode == "chat": system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель. Веди естественную беседу, объясняй понятно, подбадривай."
+    elif mode == "explain": system_prompt = base_instruction + "Ты — ИИ-учитель. Объясни тему просто. Структура: 1. Определение. 2. Пример. 3. 3 задачи для тренировки."
+    elif mode == "solve": system_prompt = base_instruction + "Ты — репетитор. Реши задачу по шагам (Шаг 1, Шаг 2...). В конце выдели *Итоговый ответ*."
+    else: system_prompt = base_instruction + "Ты — учитель. Найди ошибки в ДЗ и объясни их. Пиши мягко."
 
     messages = [{"role": "system", "content": system_prompt}]
     if context: messages.append({"role": "user", "content": f"История: {context}"})
@@ -181,30 +145,54 @@ def ask_gigachat(prompt, context="", mode="chat"):
     data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
-        if response.status_code != 200: return f"Ошибка ИИ."
+        if response.status_code != 200: return "⚠️ Ошибка ИИ при генерации."
         return clean_latex(response.json()['choices'][0]['message']['content'])
-    except Exception: return "Ошибка при генерации ответа."
+    except Exception: return "⚠️ Ошибка при генерации ответа."
 
 def get_main_keyboard():
     return {
         "type": "inline_keyboard",
         "payload": {
             "buttons": [
-                [{"type": "callback", "text": "💬 Поговорить с ИИ", "payload": "btn_chat_teacher"}, {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"}],
-                [{"type": "callback", "text": "📸 Решить задачу", "payload": "btn_solve_photo"}, {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"}],
-                [{"type": "callback", "text": "➕ Новый чат", "payload": "btn_new_chat"}, {"type": "callback", "text": "📂 Мои чаты", "payload": "btn_list_chats"}]
+                [
+                    {"type": "callback", "text": "💬 Чат с учителем", "payload": "btn_chat_teacher"},
+                    {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"}
+                ],
+                [
+                    {"type": "callback", "text": "📸 Решить задачу", "payload": "btn_solve_photo"},
+                    {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"}
+                ]
             ]
         }
     }
 
-def send_message(chat_id, text, show_keyboard=False):
+def get_back_keyboard():
+    return {
+        "type": "inline_keyboard",
+        "payload": {
+            "buttons": [
+                [{"type": "callback", "text": "🏠 Вернуться в главное меню", "payload": "btn_main_menu"}]
+            ]
+        }
+    }
+
+def send_message(chat_id, text, keyboard_type="main"):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
     payload = {"text": text, "format": "markdown"}
-    if show_keyboard: payload["attachments"] = [get_main_keyboard()]
-    try: requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
-    except Exception as e: print(f"Ошибка отправки: {e}", flush=True)
+    
+    if keyboard_type == "main":
+        payload["attachments"] = [get_main_keyboard()]
+    elif keyboard_type == "back":
+        payload["attachments"] = [get_back_keyboard()]
+    
+    try:
+        response = requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
+        if response.status_code != 200:
+            print(f"ОШИБКА ОТПРАВКИ MAX: {response.text}", flush=True)
+    except Exception as e:
+        print(f"Ошибка отправки: {e}", flush=True)
 
 def get_updates(marker=0):
     url = f"{BASE_URL}/updates"
@@ -219,16 +207,18 @@ def get_updates(marker=0):
 def process_update(update):
     update_type = update.get("update_type")
     
-    # ОБРАБОТКА НАЖАТИЯ КНОПКИ "НАЧАТЬ"
     if update_type == "bot_started":
         chat_id = update.get("chat_id")
         user_id = update.get("user", {}).get("user_id")
         if chat_id and user_id:
             save_user_chat(user_id, chat_id)
-            get_active_session(user_id)
             set_user_state(user_id, "idle")
-            welcome = "👋 Привет! Я твой личный онлайн-учитель.\n\nВыбери нужный режим на кнопках ниже или просто напиши мне, если хочешь поболтать!"
-            send_message(chat_id, welcome, show_keyboard=True)
+            welcome = (
+                "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
+                "Я помогу тебе разобраться в сложных темах, проверю домашку или решу задачу по фото.\n\n"
+                "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
+            )
+            send_message(chat_id, welcome, keyboard_type="main")
         return
         
     if update_type == "message_callback":
@@ -237,28 +227,21 @@ def process_update(update):
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id") or get_user_chat(user_id)
         payload = callback.get("payload")
         
-        if payload == "btn_chat_teacher":
+        if payload == "btn_main_menu":
+            set_user_state(user_id, "idle")
+            send_message(chat_id, "🏠 *Главное меню.* Выбери, чем займемся?", keyboard_type="main")
+        elif payload == "btn_chat_teacher":
             set_user_state(user_id, "chatting_with_teacher")
-            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.* Задавай любые вопросы. О чем хочешь поговорить?")
-        elif payload == "btn_new_chat":
-            create_new_session(user_id)
-            send_message(chat_id, "✨ Создан новый чат! Задай свой вопрос.")
-        elif payload == "btn_list_chats":
-            sessions = get_user_sessions(user_id)
-            buttons = [[{"type": "callback", "text": f"💬 {sess[1]}", "payload": f"switch_{sess[0]}"}] for sess in sessions]
-            send_message(chat_id, "Выбери чат:", attachments=[{"type": "inline_keyboard", "payload": {"buttons": buttons}}])
-        elif payload.startswith("switch_"):
-            if switch_session(user_id, int(payload.split("_")[1])): send_message(chat_id, "✅ Переключено!")
-            else: send_message(chat_id, "❌ Ошибка.")
+            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы, и мы все разберем в формате живого диалога. О чем хочешь поговорить?", keyboard_type="back")
         elif payload == "btn_explain":
             set_user_state(user_id, "waiting_for_explanation")
-            send_message(chat_id, "📚 Напиши тему, которую нужно объяснить.")
+            send_message(chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_ или _Закон Ома_)", keyboard_type="back")
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
-            send_message(chat_id, "📸 Отправь фото с задачей.")
+            send_message(chat_id, "📸 *Отправь мне фото с задачей*, и я решу её с подробным объяснением по шагам!", keyboard_type="back")
         elif payload == "btn_check_hw":
             set_user_state(user_id, "waiting_for_check_hw")
-            send_message(chat_id, "📝 Отправь фото или текст решения.")
+            send_message(chat_id, "📝 *Отправь фото или текст своего решения*, и я проверю его без осуждения.", keyboard_type="back")
         return
 
     if update_type != "message_created": return
@@ -272,42 +255,44 @@ def process_update(update):
     if not chat_id or not user_id: return
     save_user_chat(user_id, chat_id)
     
-    # Обработка /start (на случай, если пришел текстом)
-    if text == "/start" or text == "/help":
-        get_active_session(user_id)
+    if text in ["/start", "/help"]:
         set_user_state(user_id, "idle")
-        welcome = "👋 Привет! Я твой личный онлайн-учитель.\n\nВыбери нужный режим на кнопках ниже или просто напиши мне, если хочешь поболтать!"
-        send_message(chat_id, welcome, show_keyboard=True)
+        welcome = (
+            "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
+            "Я помогу тебе разобраться в сложных темах, проверю домашку или решу задачу по фото.\n\n"
+            "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
+        )
+        send_message(chat_id, welcome, keyboard_type="main")
         return
 
     user_state = get_user_state(user_id)
     image_url = next((att.get("payload", {}).get("url") for att in attachments if att.get("type") == "image"), None)
 
     if image_url:
-        send_message(chat_id, "📸 Фото получено! Распознаю...")
+        send_message(chat_id, "📸 *Фото получено! Распознаю текст...*", keyboard_type="none")
         try:
             img_resp = requests.get(image_url, timeout=15, verify=False)
             image = Image.open(io.BytesIO(img_resp.content))
             extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
             
             if not extracted_text.strip():
-                send_message(chat_id, "😔 Текст не распознан.")
+                send_message(chat_id, "😔 *Не удалось распознать текст.* Попробуй сфотографировать четче.", keyboard_type="main")
                 return
             
-            send_message(chat_id, "✅ Текст распознан. Отправляю ИИ...")
+            send_message(chat_id, "✅ *Текст распознан. Отправляю ИИ...*", keyboard_type="none")
             mode = "check" if user_state == "waiting_for_check_hw" else "solve"
             response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context=get_history(user_id), mode=mode)
-            send_message(chat_id, response_text, show_keyboard=True)
+            send_message(chat_id, response_text, keyboard_type="main")
             update_history(user_id, "Фото решено.")
             set_user_state(user_id, "idle")
-        except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.")
+        except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="main")
         return
 
     if text:
-        send_message(chat_id, "⏳ Думаю...")
+        send_message(chat_id, "⏳ *Думаю над ответом...*", keyboard_type="none")
         mode = "explain" if user_state == "waiting_for_explanation" else ("check" if user_state == "waiting_for_check_hw" else "chat")
         response_text = ask_gigachat(text, context=get_history(user_id), mode=mode)
-        send_message(chat_id, response_text, show_keyboard=True)
+        send_message(chat_id, response_text, keyboard_type="main")
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
         if user_state in ["waiting_for_explanation", "waiting_for_check_hw"]: set_user_state(user_id, "idle")
 
