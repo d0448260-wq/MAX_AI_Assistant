@@ -11,12 +11,17 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА БЕЗ СИСТЕМЫ ЧАТОВ ===", flush=True)
+print("=== ЗАПУСК БОТА С КЭШИРОВАНИЕМ ТОКЕНА ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI2Y2EtZWQyMy03NDI2LThiMDgtMWUzY2ExMTBjZmE1OjBiOTczMDljLWVhZWQtNDNlYi1iYTdjLWFkNmRlZDkwZTJlZA=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
 
 BASE_URL = "https://platform-api2.max.ru"
+
+# --- КЭШ ДЛЯ ТОКЕНА GIGACHAT ---
+cached_gigachat_token = None
+token_expiry_time = 0
+# -------------------------------
 
 def clean_latex(text):
     if not text: return text
@@ -108,17 +113,41 @@ def get_user_state(user_id):
     return row[0] if row else None
 
 def get_gigachat_token():
+    global cached_gigachat_token, token_expiry_time
+    
+    # Если токен есть и он еще не истек (живет 30 минут), возвращаем его
+    if cached_gigachat_token and time.time() < token_expiry_time:
+        return cached_gigachat_token
+
+    print("🔄 Запрашиваю новый токен GigaChat...", flush=True)
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     payload = 'scope=GIGACHAT_API_PERS'
-    headers = {'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json', 'RqUID': str(uuid.uuid4()), 'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'}
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded', 
+        'Accept': 'application/json', 
+        'RqUID': str(uuid.uuid4()), 
+        'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'
+    }
+    
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
-        return response.json().get('access_token')
-    except Exception: return None
+        if response.status_code == 200:
+            data = response.json()
+            cached_gigachat_token = data.get('access_token')
+            # Устанавливаем время жизни токена на 25 минут (чтобы точно не истек)
+            token_expiry_time = time.time() + 1500 
+            print("✅ Токен успешно получен и закэширован.", flush=True)
+            return cached_gigachat_token
+        else:
+            print(f"❌ ОШИБКА АВТОРИЗАЦИИ GIGACHAT ({response.status_code}): {response.text}", flush=True)
+            return None
+    except Exception as e:
+        print(f"❌ Ошибка сети при получении токена: {e}", flush=True)
+        return None
 
 def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
-    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ."
+    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ. Проверьте логи."
 
     url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
@@ -143,11 +172,17 @@ def ask_gigachat(prompt, context="", mode="chat"):
     messages.append({"role": "user", "content": prompt})
 
     data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
+    
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
-        if response.status_code != 200: return "⚠️ Ошибка ИИ при генерации."
+        if response.status_code != 200:
+            print(f"❌ ОШИБКА API GIGACHAT ({response.status_code}): {response.text}", flush=True)
+            return "⚠️ Ошибка ИИ при генерации. Проверьте логи."
+            
         return clean_latex(response.json()['choices'][0]['message']['content'])
-    except Exception: return "⚠️ Ошибка при генерации ответа."
+    except Exception as e:
+        print(f"❌ Ошибка парсинга: {e}", flush=True)
+        return "⚠️ Ошибка при генерации ответа."
 
 def get_main_keyboard():
     return {
