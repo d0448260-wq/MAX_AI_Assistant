@@ -12,7 +12,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА (ОТКАТ К СТАБИЛЬНОЙ ВЕРСИИ) ===", flush=True)
+print("=== ЗАПУСК ПОЛНОГО КОДА БОТА ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "MDFhMWI3ZjMtYTM3Mi03NmIwLWJkYjktNjM1YWI1YTY0OWYzOjBlYTFjNjk0LTQzN2UtNGQ3MC1iYTZiLWU0YWQyZWNmMWI4ZA=="
@@ -175,15 +175,18 @@ def get_gigachat_token():
             cached_gigachat_token = response.json().get('access_token')
             token_expiry_time = time.time() + 1500 
             return cached_gigachat_token
-        return None
-    except Exception:
+        else:
+            print(f"❌ ОШИБКА АВТОРИЗАЦИИ ({response.status_code}): {response.text}", flush=True)
+            return None
+    except Exception as e:
+        print(f"❌ Ошибка сети при получении токена: {e}", flush=True)
         return None
 
 def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
-    if not token: return "⚠️ Ошибка авторизации в ИИ."
+    if not token: return "⚠️ Ошибка авторизации в ИИ. Проверьте логи."
 
-    url = "https://api.giga.chat/v1/chat/completions"
+    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
     base_instruction = (
@@ -202,14 +205,31 @@ def ask_gigachat(prompt, context="", mode="chat"):
 
     data = {"model": "GigaChat", "messages": messages, "temperature": 0.6}
     
-    try:
-        response = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
-        if response.status_code != 200:
-            return "⚠️ Ошибка ИИ при генерации."
+    # Делаем до 3 попыток
+    for attempt in range(3):
+        try:
+            response = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
             
-        return clean_latex(response.json()['choices'][0]['message']['content'])
-    except Exception:
-        return "⚠️ Превышено время ожидания ответа от ИИ. Попробуйте еще раз."
+            if response.status_code == 200:
+                return clean_latex(response.json()['choices'][0]['message']['content'])
+            else:
+                print(f"❌ ОШИБКА API ({response.status_code}): {response.text}", flush=True)
+                if response.status_code == 401:
+                    global cached_gigachat_token
+                    cached_gigachat_token = None
+                    continue
+                if response.status_code == 429:
+                    time.sleep(2)
+                    continue
+                break 
+        except requests.exceptions.Timeout:
+            print("❌ Таймаут при запросе к GigaChat.", flush=True)
+            time.sleep(2)
+        except Exception as e:
+            print(f"❌ Ошибка парсинга: {e}", flush=True)
+            break
+
+    return "⚠️ Сервер ИИ временно недоступен. Попробуйте позже."
 
 def get_main_keyboard():
     return {
@@ -261,6 +281,8 @@ def send_message(user_id, chat_id, text, keyboard_type="single", clean_previous=
             mid = res_json.get("message", {}).get("body", {}).get("mid")
             if mid:
                 save_last_mid(user_id, mid)
+        else:
+            print(f"ОШИБКА ОТПРАВКИ MAX: {response.text}", flush=True)
     except Exception:
         pass
 
@@ -286,6 +308,7 @@ def process_update(update):
             clear_history(user_id)
             welcome = (
                 "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
+                "Я помогу тебе разобраться в сложных темах, проверю домашку или решу задачу по фото.\n\n"
                 "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
             )
             send_message(user_id, chat_id, welcome, keyboard_type="main", clean_previous=True)
