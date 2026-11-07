@@ -11,7 +11,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С ОЧИСТКОЙ КОНТЕКСТА ПРИ РЕШЕНИИ ЗАДАЧ ===", flush=True)
+print("=== ЗАПУСК БОТА С ОЧИСТКОЙ СООБЩЕНИЙ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "MDFhMWI3NzItZThlZS03ZmEzLTlmMDktZGU0YTBlOWIzZTk5OmI2ZDljZjgwLTM2YTQtNDQ1ZS04OWU3LTQ2MmIxYjQ4YmU2MQ=="
@@ -24,10 +24,8 @@ token_expiry_time = 0
 def clean_latex(text):
     if not text: return text
     text = text.replace('$$', '').replace('$', '')
-    # Чистим артефакты OCR (когда пропали слэши)
     text = text.replace('vecF', 'F').replace('veca', 'a').replace('vecv', 'v')
-    text = text.replace('Delta', 'Δ')
-    text = text.replace('quad', ' ')
+    text = text.replace('Delta', 'Δ').replace('quad', ' ')
     text = re.sub(r'fracdvecvdt', '(dv)/(dt)', text)
     text = re.sub(r'frac([a-zA-Z0-9]+)([a-zA-Z0-9]+)', r'(\1)/(\2)', text)
     
@@ -35,17 +33,21 @@ def clean_latex(text):
     for eng, sym in greek.items():
         text = text.replace(f'\\{eng}', sym)
         text = re.sub(r'\b' + eng + r'\b', sym, text)
+        
     text = text.replace('^2', '²').replace('^3', '³')
     text = re.sub(r'\^\{([^{}]+)\}', r'^\1', text)
     text = re.sub(r'_\{([^{}]+)\}', r'_\1', text)
     text = re.sub(r'\\?frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1) / (\2)', text)
     text = re.sub(r'\\frac\s+([a-zA-Z0-9]+)\s+([a-zA-Z0-9]+)', r'(\1) / (\2)', text)
+    
     symbols = {'times': '×', 'cdot': '·', 'approx': '≈', 'le': '≤', 'ge': '≥', 'neq': '≠', 'pm': '±', 'sqrt': '√', 'infty': '∞', 'sum': 'Σ'}
     for eng, sym in symbols.items():
         text = text.replace(f'\\{eng}', sym)
+        
     text = re.sub(r'\\text\{([^{}]+)\}', r'\1', text)
     for func in ['sin', 'cos', 'tan', 'log', 'ln']:
         text = text.replace(f'\\{func}', func)
+        
     text = text.replace('\\', '').replace('{', '').replace('}', '').replace(' , ', ' ')
     return text
 
@@ -56,11 +58,14 @@ def init_db():
                         user_id INTEGER PRIMARY KEY,
                         chat_id INTEGER,
                         state TEXT,
-                        history TEXT
+                        history TEXT,
+                        last_mid TEXT
                       )''')
     try: cursor.execute("ALTER TABLE users ADD COLUMN chat_id INTEGER")
     except sqlite3.OperationalError: pass
     try: cursor.execute("ALTER TABLE users ADD COLUMN history TEXT")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE users ADD COLUMN last_mid TEXT")
     except sqlite3.OperationalError: pass
     conn.commit()
     conn.close()
@@ -80,6 +85,32 @@ def get_user_chat(user_id):
     row = cursor.fetchone()
     conn.close()
     return row[0] if row and row[0] else user_id
+
+def get_last_mid(user_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT last_mid FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+def save_last_mid(user_id, mid):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cursor.execute("UPDATE users SET last_mid = ? WHERE user_id = ?", (mid, user_id))
+    conn.commit()
+    conn.close()
+
+def delete_message(chat_id, message_id):
+    url = f"{BASE_URL}/messages"
+    headers = {"Authorization": MAX_TOKEN}
+    params = {"chat_id": chat_id, "message_ids": message_id}
+    try:
+        requests.delete(url, headers=headers, params=params, verify=False, timeout=10)
+        print(f"🗑️ Удалено старое сообщение {message_id}", flush=True)
+    except Exception as e:
+        print(f"Ошибка удаления: {e}", flush=True)
 
 def get_history(user_id):
     conn = sqlite3.connect('school_assistant.db')
@@ -220,7 +251,9 @@ def get_single_back_keyboard():
         }
     }
 
-def send_message(chat_id, text, keyboard_type="single"):
+def send_message(user_id, chat_id, text, keyboard_type="single", delete_previous=False):
+    old_mid = get_last_mid(user_id) if delete_previous else None
+
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
@@ -233,7 +266,16 @@ def send_message(chat_id, text, keyboard_type="single"):
     
     try:
         response = requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
-        if response.status_code != 200:
+        if response.status_code == 200:
+            res_json = response.json()
+            # Достаем ID нового сообщения
+            mid = res_json.get("message", {}).get("body", {}).get("mid")
+            if mid:
+                save_last_mid(user_id, mid)
+                # Если нужно, удаляем ПРЕДЫДУЩЕЕ сообщение бота
+                if old_mid:
+                    delete_message(chat_id, old_mid)
+        else:
             print(f"ОШИБКА ОТПРАВКИ MAX: {response.text}", flush=True)
     except Exception as e:
         print(f"Ошибка отправки: {e}", flush=True)
@@ -257,13 +299,13 @@ def process_update(update):
         if chat_id and user_id:
             save_user_chat(user_id, chat_id)
             set_user_state(user_id, "idle")
-            clear_history(user_id) # Очищаем историю при старте
+            clear_history(user_id)
             welcome = (
                 "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
                 "Я помогу тебе разобраться в сложных темах, проверю домашку или решу задачу по фото.\n\n"
                 "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
             )
-            send_message(chat_id, welcome, keyboard_type="main")
+            send_message(user_id, chat_id, welcome, keyboard_type="main", delete_previous=True)
         return
         
     if update_type == "message_callback":
@@ -272,26 +314,27 @@ def process_update(update):
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id") or get_user_chat(user_id)
         payload = callback.get("payload")
         
+        # Для кнопок ставим delete_previous=True, чтобы удалять старые меню и не мусорить
         if payload == "btn_main_menu":
             set_user_state(user_id, "idle")
-            clear_history(user_id) # Очищаем историю при выходе в меню
-            send_message(chat_id, "🏠 *Главное меню.* Чем еще я могу помочь?", keyboard_type="main")
+            clear_history(user_id)
+            send_message(user_id, chat_id, "🏠 *Главное меню.* Чем еще я могу помочь?", keyboard_type="main", delete_previous=True)
         elif payload == "btn_chat_teacher":
             set_user_state(user_id, "chatting_with_teacher")
-            clear_history(user_id) # Чистый лист для нового урока
-            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы, я буду отвечать. Чтобы выйти, нажми кнопку внизу.", keyboard_type="single")
+            clear_history(user_id)
+            send_message(user_id, chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы. Чтобы выйти, нажми кнопку внизу.", keyboard_type="single", delete_previous=True)
         elif payload == "btn_explain":
             set_user_state(user_id, "waiting_for_explanation")
             clear_history(user_id) 
-            send_message(chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_).", keyboard_type="single")
+            send_message(user_id, chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_).", keyboard_type="single", delete_previous=True)
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
             clear_history(user_id) 
-            send_message(chat_id, "📸 *Отправь мне фото с задачей*, и я решу её по шагам!", keyboard_type="single")
+            send_message(user_id, chat_id, "📸 *Отправь мне фото с задачей*, и я решу её по шагам!", keyboard_type="single", delete_previous=True)
         elif payload == "btn_check_hw":
             set_user_state(user_id, "waiting_for_check_hw")
             clear_history(user_id) 
-            send_message(chat_id, "📝 *Отправь фото или текст решения*, и я проверю его.", keyboard_type="single")
+            send_message(user_id, chat_id, "📝 *Отправь фото или текст решения*, и я проверю его.", keyboard_type="single", delete_previous=True)
         return
 
     if update_type != "message_created": return
@@ -312,46 +355,45 @@ def process_update(update):
             "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
             "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
         )
-        send_message(chat_id, welcome, keyboard_type="main")
+        send_message(user_id, chat_id, welcome, keyboard_type="main", delete_previous=True)
         return
 
     user_state = get_user_state(user_id)
     image_url = next((att.get("payload", {}).get("url") for att in attachments if att.get("type") == "image"), None)
 
-    # --- ОБРАБОТКА ФОТО (БЕЗ ИСТОРИИ, ЧТОБЫ НЕ ПУТАТЬСЯ) ---
+    # ОБРАБОТКА ФОТО
     if image_url:
-        send_message(chat_id, "📸 *Фото получено! Распознаю текст...*", keyboard_type="none")
+        send_message(user_id, chat_id, "📸 *Фото получено! Распознаю текст...*", keyboard_type="none", delete_previous=True)
         try:
             img_resp = requests.get(image_url, timeout=15, verify=False)
             image = Image.open(io.BytesIO(img_resp.content))
             extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
             
             if not extracted_text.strip():
-                send_message(chat_id, "😔 *Не удалось распознать текст.* Попробуй сфотографировать четче.", keyboard_type="single")
+                send_message(user_id, chat_id, "😔 *Не удалось распознать текст.* Попробуй сфотографировать четче.", keyboard_type="single")
                 return
             
-            send_message(chat_id, "✅ *Текст распознан. Отправляю ИИ...*", keyboard_type="none")
+            send_message(user_id, chat_id, "✅ *Текст распознан. Отправляю ИИ...*", keyboard_type="none", delete_previous=True)
             mode = "check" if user_state == "waiting_for_check_hw" else "solve"
-            # Передаем context="" (пустую историю), чтобы ИИ не отвлекался на прошлые темы
-            response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context="", mode=mode)
             
-            send_message(chat_id, response_text, keyboard_type="single")
-            # После решения задачи очищаем историю, чтобы следующий вопрос был с чистого листа
+            response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context="", mode=mode)
+            send_message(user_id, chat_id, response_text, keyboard_type="single", delete_previous=False)
             clear_history(user_id)
             set_user_state(user_id, "idle")
-        except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="single")
+        except Exception: 
+            send_message(user_id, chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="single")
         return
 
-    # --- ОБРАБОТКА ТЕКСТА ---
+    # ОБРАБОТКА ТЕКСТА
     if text:
-        send_message(chat_id, "⏳ *Думаю над ответом...*", keyboard_type="none")
+        send_message(user_id, chat_id, "⏳ *Думаю над ответом...*", keyboard_type="none", delete_previous=True)
         
         if user_state == "chatting_with_teacher":
             mode = "chat"
-            context = get_history(user_id) # В режиме чата передаем историю
+            context = get_history(user_id) 
         elif user_state == "waiting_for_explanation":
             mode = "explain"
-            context = "" # Для объяснения темы история не нужна
+            context = "" 
             set_user_state(user_id, "idle")
         elif user_state == "waiting_for_check_hw":
             mode = "check"
@@ -359,12 +401,12 @@ def process_update(update):
             set_user_state(user_id, "idle")
         else:
             mode = "chat"
-            context = "" # Если просто написали, лучше начать с чистого листа
+            context = "" 
 
         response_text = ask_gigachat(text, context=context, mode=mode)
-        send_message(chat_id, response_text, keyboard_type="single")
+        # Удаляем "Думаю над ответом" и присылаем финальный ответ
+        send_message(user_id, chat_id, response_text, keyboard_type="single", delete_previous=True)
         
-        # Сохраняем в историю только если это был свободный чат
         if mode == "chat":
             update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
         else:
