@@ -11,7 +11,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С ИСПРАВЛЕННЫМ УДАЛЕНИЕМ ===", flush=True)
+print("=== ЗАПУСК БОТА С ИСПРАВЛЕННЫМ УДАЛЕНИЕМ (message_id) ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "MDFhMWI3NzItZThlZS03ZmEzLTlmMDktZGU0YTBlOWIzZTk5OmI2ZDljZjgwLTM2YTQtNDQ1ZS04OWU3LTQ2MmIxYjQ4YmU2MQ=="
@@ -103,12 +103,11 @@ def save_last_mid(user_id, mid):
     conn.close()
 
 def delete_message(chat_id, message_id):
-    """Удаляет сообщение и ВЫВОДИТ ОШИБКУ, если не получилось"""
+    """Удаляет сообщение. Используем message_id (в единственном числе)"""
     if not message_id: return
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
-    # В MAX API удаление происходит через DELETE-запрос с параметрами
-    params = {"chat_id": chat_id, "message_ids": message_id}
+    params = {"chat_id": chat_id, "message_id": message_id}  # <--- ИСПРАВЛЕНО ЗДЕСЬ
     try:
         response = requests.delete(url, headers=headers, params=params, verify=False, timeout=10)
         if response.status_code == 200:
@@ -255,7 +254,6 @@ def get_single_back_keyboard():
     }
 
 def send_message(user_id, chat_id, text, keyboard_type="single", clean_previous=True):
-    """Отправляет сообщение и удаляет предыдущее, если это нужно"""
     if clean_previous:
         old_mid = get_last_mid(user_id)
         if old_mid:
@@ -317,7 +315,6 @@ def process_update(update):
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id") or get_user_chat(user_id)
         payload = callback.get("payload")
         
-        # УДАЛЯЕМ сообщение, на котором нажали кнопку
         clicked_mid = callback.get("message", {}).get("body", {}).get("mid")
         if clicked_mid:
             delete_message(chat_id, clicked_mid)
