@@ -10,7 +10,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК ФИНАЛЬНОЙ ВЕРСИИ БОТА ===", flush=True)
+print("=== ЗАПУСК ИСПРАВЛЕННОЙ ВЕРСИИ С КНОПКАМИ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
@@ -22,9 +22,15 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
+                        chat_id INTEGER,
                         current_session_id INTEGER,
                         state TEXT
                       )''')
+    # На случай, если база уже создана без chat_id
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN chat_id INTEGER")
+    except sqlite3.OperationalError:
+        pass
     cursor.execute('''CREATE TABLE IF NOT EXISTS sessions (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER,
@@ -34,6 +40,22 @@ def init_db():
     conn.commit()
     conn.close()
 
+def save_user_chat(user_id, chat_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cursor.execute("UPDATE users SET chat_id = ? WHERE user_id = ?", (chat_id, user_id))
+    conn.commit()
+    conn.close()
+
+def get_user_chat(user_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT chat_id FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else user_id
+
 def get_active_session(user_id):
     conn = sqlite3.connect('school_assistant.db')
     cursor = conn.cursor()
@@ -42,7 +64,8 @@ def get_active_session(user_id):
     if not row or not row[0]:
         cursor.execute("INSERT INTO sessions (user_id, title, history) VALUES (?, ?, ?)", (user_id, "Чат 1", ""))
         session_id = cursor.lastrowid
-        cursor.execute("INSERT OR REPLACE INTO users (user_id, current_session_id) VALUES (?, ?)", (user_id, session_id))
+        cursor.execute("INSERT OR IGNORE INTO users (user_id, current_session_id) VALUES (?, ?)", (user_id, session_id))
+        cursor.execute("UPDATE users SET current_session_id = ? WHERE user_id = ?", (session_id, user_id))
         conn.commit()
         conn.close()
         return session_id
@@ -225,12 +248,14 @@ def process_update(update):
     
     if update_type == "message_callback":
         callback = update.get("callback", {})
+        print(f"DEBUG CALLBACK: {callback}", flush=True) # Смотрим, как MAX присылает кнопки
+        
         user_id = callback.get("user", {}).get("user_id")
         
-        # ИСПРАВЛЕНИЕ: MAX может присылать chat_id в разных местах для callback
+        # Берем chat_id из базы, если его нет в коллбеке
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id")
         if not chat_id:
-            chat_id = user_id
+            chat_id = get_user_chat(user_id)
             
         payload = callback.get("payload")
         
@@ -268,6 +293,9 @@ def process_update(update):
 
     if not chat_id or not user_id:
         return
+    
+    # СОХРАНЯЕМ CHAT_ID В БАЗУ ПРИ КАЖДОМ СООБЩЕНИИ
+    save_user_chat(user_id, chat_id)
     
     if text == "/start" or text == "/help":
         get_active_session(user_id)
