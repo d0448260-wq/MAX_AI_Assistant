@@ -13,7 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 print("=== ЗАПУСК ИСПРАВЛЕННОЙ ВЕРСИИ С КНОПКАМИ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OmI1ZGIwYzY3LTZlZTgtNGQzNC05NjA5LTJhNmY3ZjYyMDU4ZA=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
