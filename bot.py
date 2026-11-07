@@ -11,10 +11,9 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С НОВЫМ КЛЮЧОМ ===", flush=True)
+print("=== ЗАПУСК БОТА С ОЧИСТКОЙ КОНТЕКСТА ПРИ РЕШЕНИИ ЗАДАЧ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-# ВСТАВЛЕН ВАШ НОВЫЙ КЛЮЧ
 GIGACHAT_AUTH_KEY = "MDFhMWI3NzItZThlZS03ZmEzLTlmMDktZGU0YTBlOWIzZTk5OmI2ZDljZjgwLTM2YTQtNDQ1ZS04OWU3LTQ2MmIxYjQ4YmU2MQ=="
 
 BASE_URL = "https://platform-api2.max.ru"
@@ -25,6 +24,13 @@ token_expiry_time = 0
 def clean_latex(text):
     if not text: return text
     text = text.replace('$$', '').replace('$', '')
+    # Чистим артефакты OCR (когда пропали слэши)
+    text = text.replace('vecF', 'F').replace('veca', 'a').replace('vecv', 'v')
+    text = text.replace('Delta', 'Δ')
+    text = text.replace('quad', ' ')
+    text = re.sub(r'fracdvecvdt', '(dv)/(dt)', text)
+    text = re.sub(r'frac([a-zA-Z0-9]+)([a-zA-Z0-9]+)', r'(\1)/(\2)', text)
+    
     greek = {'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ', 'theta': 'θ', 'lambda': 'λ', 'mu': 'μ', 'pi': 'π', 'rho': 'ρ', 'sigma': 'σ', 'tau': 'τ', 'phi': 'φ', 'omega': 'ω'}
     for eng, sym in greek.items():
         text = text.replace(f'\\{eng}', sym)
@@ -90,8 +96,15 @@ def update_history(user_id, new_message):
     cursor.execute("SELECT history FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     history = row[0] if row and row[0] else ""
-    history = (history + "\n" + new_message)[-4000:]
+    history = (history + "\n" + new_message)[-2500:]
     cursor.execute("UPDATE users SET history = ? WHERE user_id = ?", (history, user_id))
+    conn.commit()
+    conn.close()
+
+def clear_history(user_id):
+    conn = sqlite3.connect('school_assistant.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET history = '' WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
@@ -126,16 +139,14 @@ def get_gigachat_token():
         'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'
     }
     try:
-        # Увеличили timeout до 30 секунд
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=30)
         if response.status_code == 200:
-            data = response.json()
-            cached_gigachat_token = data.get('access_token')
+            cached_gigachat_token = response.json().get('access_token')
             token_expiry_time = time.time() + 1500 
             print("✅ Токен успешно получен.", flush=True)
             return cached_gigachat_token
         else:
-            print(f"❌ ОШИБКА АВТОРИЗАЦИИ GIGACHAT ({response.status_code}): {response.text}", flush=True)
+            print(f"❌ ОШИБКА АВТОРИЗАЦИИ ({response.status_code}): {response.text}", flush=True)
             return None
     except Exception as e:
         print(f"❌ Ошибка сети: {e}", flush=True)
@@ -143,7 +154,7 @@ def get_gigachat_token():
 
 def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
-    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ. Проверьте логи."
+    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ."
 
     url = "https://api.giga.chat/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
@@ -151,20 +162,22 @@ def ask_gigachat(prompt, context="", mode="chat"):
     base_instruction = (
         "ТЫ ДОЛЖЕН СТРОГО СОБЛЮДАТЬ ЭТИ ПРАВИЛА ФОРМАТИРОВАНИЯ:\n"
         "1. НИКОГДА не используй $, $$, \\ и LaTeX (\\frac, \\cdot и т.д.).\n"
-        "2. Степени: x², y³. Дроби: ½ или a/b. Корень: √.\n"
+        "2. Степени: x², y³. Дроби: ½ или a/b. Корень: √. Векторы пиши просто буквами (F, a).\n"
         "3. Для жирного текста используй *звездочки*.\n"
-        "4. Для списков используй маркеры (•) или цифры (1., 2.).\n"
-        "5. Делай текст структурированным: абзацы, списки, *выделение главного*.\n"
-        "6. Не пиши сплошным текстом. Используй эмодзи для акцентов.\n"
+        "4. Делай текст структурированным: абзацы, списки.\n"
+        "5. Не пиши сплошным текстом. Используй эмодзи.\n"
     )
     
-    if mode == "chat": system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель. Веди естественную беседу, объясняй понятно, подбадривай."
-    elif mode == "explain": system_prompt = base_instruction + "Ты — ИИ-учитель. Объясни тему просто. Структура: 1. Определение. 2. Пример. 3. 3 задачи для тренировки."
-    elif mode == "solve": system_prompt = base_instruction + "Ты — репетитор. Реши задачу по шагам (Шаг 1, Шаг 2...). В конце выдели *Итоговый ответ*."
-    else: system_prompt = base_instruction + "Ты — учитель. Найди ошибки в ДЗ и объясни их. Пиши мягко."
+    if mode == "chat": system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель. Отвечай на вопрос ученика."
+    elif mode == "explain": system_prompt = base_instruction + "Ты — ИИ-учитель. Объясни тему просто."
+    elif mode == "solve": system_prompt = base_instruction + "Ты — репетитор. Реши задачу по шагам (Шаг 1, Шаг 2...)."
+    else: system_prompt = base_instruction + "Ты — учитель. Найди ошибки в ДЗ и объясни их."
 
     messages = [{"role": "system", "content": system_prompt}]
-    if context: messages.append({"role": "user", "content": f"История: {context}"})
+    
+    if context:
+        messages.append({"role": "system", "content": f"История прошлых сообщений (для контекста): {context}"})
+        
     messages.append({"role": "user", "content": prompt})
 
     data = {"model": "GigaChat-2", "messages": messages, "temperature": 0.7}
@@ -172,7 +185,7 @@ def ask_gigachat(prompt, context="", mode="chat"):
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=40)
         if response.status_code != 200:
-            print(f"❌ ОШИБКА API GIGACHAT ({response.status_code}): {response.text}", flush=True)
+            print(f"❌ ОШИБКА API ({response.status_code}): {response.text}", flush=True)
             return "⚠️ Ошибка ИИ при генерации."
             
         return clean_latex(response.json()['choices'][0]['message']['content'])
@@ -244,6 +257,7 @@ def process_update(update):
         if chat_id and user_id:
             save_user_chat(user_id, chat_id)
             set_user_state(user_id, "idle")
+            clear_history(user_id) # Очищаем историю при старте
             welcome = (
                 "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
                 "Я помогу тебе разобраться в сложных темах, проверю домашку или решу задачу по фото.\n\n"
@@ -260,18 +274,23 @@ def process_update(update):
         
         if payload == "btn_main_menu":
             set_user_state(user_id, "idle")
+            clear_history(user_id) # Очищаем историю при выходе в меню
             send_message(chat_id, "🏠 *Главное меню.* Чем еще я могу помочь?", keyboard_type="main")
         elif payload == "btn_chat_teacher":
             set_user_state(user_id, "chatting_with_teacher")
+            clear_history(user_id) # Чистый лист для нового урока
             send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы, я буду отвечать. Чтобы выйти, нажми кнопку внизу.", keyboard_type="single")
         elif payload == "btn_explain":
             set_user_state(user_id, "waiting_for_explanation")
+            clear_history(user_id) 
             send_message(chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_).", keyboard_type="single")
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
+            clear_history(user_id) 
             send_message(chat_id, "📸 *Отправь мне фото с задачей*, и я решу её по шагам!", keyboard_type="single")
         elif payload == "btn_check_hw":
             set_user_state(user_id, "waiting_for_check_hw")
+            clear_history(user_id) 
             send_message(chat_id, "📝 *Отправь фото или текст решения*, и я проверю его.", keyboard_type="single")
         return
 
@@ -288,6 +307,7 @@ def process_update(update):
     
     if text in ["/start", "/help"]:
         set_user_state(user_id, "idle")
+        clear_history(user_id)
         welcome = (
             "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
             "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
@@ -298,6 +318,7 @@ def process_update(update):
     user_state = get_user_state(user_id)
     image_url = next((att.get("payload", {}).get("url") for att in attachments if att.get("type") == "image"), None)
 
+    # --- ОБРАБОТКА ФОТО (БЕЗ ИСТОРИИ, ЧТОБЫ НЕ ПУТАТЬСЯ) ---
     if image_url:
         send_message(chat_id, "📸 *Фото получено! Распознаю текст...*", keyboard_type="none")
         try:
@@ -311,31 +332,43 @@ def process_update(update):
             
             send_message(chat_id, "✅ *Текст распознан. Отправляю ИИ...*", keyboard_type="none")
             mode = "check" if user_state == "waiting_for_check_hw" else "solve"
-            response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context=get_history(user_id), mode=mode)
+            # Передаем context="" (пустую историю), чтобы ИИ не отвлекался на прошлые темы
+            response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context="", mode=mode)
             
             send_message(chat_id, response_text, keyboard_type="single")
-            update_history(user_id, "Фото решено.")
+            # После решения задачи очищаем историю, чтобы следующий вопрос был с чистого листа
+            clear_history(user_id)
             set_user_state(user_id, "idle")
         except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="single")
         return
 
+    # --- ОБРАБОТКА ТЕКСТА ---
     if text:
         send_message(chat_id, "⏳ *Думаю над ответом...*", keyboard_type="none")
         
         if user_state == "chatting_with_teacher":
             mode = "chat"
+            context = get_history(user_id) # В режиме чата передаем историю
         elif user_state == "waiting_for_explanation":
             mode = "explain"
+            context = "" # Для объяснения темы история не нужна
             set_user_state(user_id, "idle")
         elif user_state == "waiting_for_check_hw":
             mode = "check"
+            context = "" 
             set_user_state(user_id, "idle")
         else:
             mode = "chat"
+            context = "" # Если просто написали, лучше начать с чистого листа
 
-        response_text = ask_gigachat(text, context=get_history(user_id), mode=mode)
+        response_text = ask_gigachat(text, context=context, mode=mode)
         send_message(chat_id, response_text, keyboard_type="single")
-        update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
+        
+        # Сохраняем в историю только если это был свободный чат
+        if mode == "chat":
+            update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
+        else:
+            clear_history(user_id)
 
 def main():
     init_db()
