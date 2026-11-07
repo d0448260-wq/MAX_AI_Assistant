@@ -11,10 +11,10 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С УЛУЧШЕННЫМ УПРАВЛЕНИЕМ СЕССИЯМИ ===", flush=True)
+print("=== ЗАПУСК БОТА С ОДНОЙ КНОПКОЙ ВОЗВРАТА ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI3NzItZThlZS03ZmEzLTlmMDktZGU0YTBlOWIzZTk5OmI2ZDljZjgwLTM2YTQtNDQ1ZS04OWU3LTQ2MmIxYjQ4YmU2MQ=="
+GIGACHAT_AUTH_KEY = "MDFhMWI2ZDUtMjU2Ni03ZGMyLTk4ZDMtOGQwYWQ2YWJkYWJmOjJkNzczNDVmLTM4Y2EtNGEyNC04ZmU3LTk0NjNmOTE4NTZkZg=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
@@ -178,7 +178,10 @@ def ask_gigachat(prompt, context="", mode="chat"):
         print(f"❌ Ошибка парсинга: {e}", flush=True)
         return "⚠️ Ошибка при генерации ответа."
 
+# --- КЛАВИАТУРЫ ---
+
 def get_main_keyboard():
+    """4 кнопки - только для главного меню"""
     return {
         "type": "inline_keyboard",
         "payload": {
@@ -195,7 +198,8 @@ def get_main_keyboard():
         }
     }
 
-def get_back_keyboard():
+def get_single_back_keyboard():
+    """1 кнопка - для всех остальных случаев"""
     return {
         "type": "inline_keyboard",
         "payload": {
@@ -205,17 +209,7 @@ def get_back_keyboard():
         }
     }
 
-def get_chat_keyboard():
-    return {
-        "type": "inline_keyboard",
-        "payload": {
-            "buttons": [
-                [{"type": "callback", "text": "🛑 Завершить урок и выйти в меню", "payload": "btn_main_menu"}]
-            ]
-        }
-    }
-
-def send_message(chat_id, text, keyboard_type="main"):
+def send_message(chat_id, text, keyboard_type="single"):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
@@ -223,10 +217,8 @@ def send_message(chat_id, text, keyboard_type="main"):
     
     if keyboard_type == "main":
         payload["attachments"] = [get_main_keyboard()]
-    elif keyboard_type == "back":
-        payload["attachments"] = [get_back_keyboard()]
-    elif keyboard_type == "chat":
-        payload["attachments"] = [get_chat_keyboard()]
+    elif keyboard_type == "single":
+        payload["attachments"] = [get_single_back_keyboard()]
     
     try:
         response = requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
@@ -273,16 +265,16 @@ def process_update(update):
             send_message(chat_id, "🏠 *Главное меню.* Чем еще я могу помочь?", keyboard_type="main")
         elif payload == "btn_chat_teacher":
             set_user_state(user_id, "chatting_with_teacher")
-            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы, я буду отвечать. Чтобы выйти, нажми кнопку внизу.", keyboard_type="chat")
+            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы, я буду отвечать. Чтобы выйти, нажми кнопку внизу.", keyboard_type="single")
         elif payload == "btn_explain":
             set_user_state(user_id, "waiting_for_explanation")
-            send_message(chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_).", keyboard_type="back")
+            send_message(chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_).", keyboard_type="single")
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
-            send_message(chat_id, "📸 *Отправь мне фото с задачей*, и я решу её по шагам!", keyboard_type="back")
+            send_message(chat_id, "📸 *Отправь мне фото с задачей*, и я решу её по шагам!", keyboard_type="single")
         elif payload == "btn_check_hw":
             set_user_state(user_id, "waiting_for_check_hw")
-            send_message(chat_id, "📝 *Отправь фото или текст решения*, и я проверю его.", keyboard_type="back")
+            send_message(chat_id, "📝 *Отправь фото или текст решения*, и я проверю его.", keyboard_type="single")
         return
 
     if update_type != "message_created": return
@@ -308,6 +300,7 @@ def process_update(update):
     user_state = get_user_state(user_id)
     image_url = next((att.get("payload", {}).get("url") for att in attachments if att.get("type") == "image"), None)
 
+    # ОБРАБОТКА ФОТО
     if image_url:
         send_message(chat_id, "📸 *Фото получено! Распознаю текст...*", keyboard_type="none")
         try:
@@ -316,42 +309,38 @@ def process_update(update):
             extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
             
             if not extracted_text.strip():
-                send_message(chat_id, "😔 *Не удалось распознать текст.* Попробуй сфотографировать четче.", keyboard_type="main")
+                send_message(chat_id, "😔 *Не удалось распознать текст.* Попробуй сфотографировать четче.", keyboard_type="single")
                 return
             
             send_message(chat_id, "✅ *Текст распознан. Отправляю ИИ...*", keyboard_type="none")
             mode = "check" if user_state == "waiting_for_check_hw" else "solve"
             response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context=get_history(user_id), mode=mode)
             
-            # Если мы были в режиме чата, оставляем кнопку выхода из чата, иначе даем главное меню
-            kb = "chat" if user_state == "chatting_with_teacher" else "main"
-            send_message(chat_id, response_text, keyboard_type=kb)
-            
+            send_message(chat_id, response_text, keyboard_type="single")
             update_history(user_id, "Фото решено.")
-            if user_state != "chatting_with_teacher": set_user_state(user_id, "idle")
-        except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="main")
+            set_user_state(user_id, "idle")
+        except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="single")
         return
 
+    # ОБРАБОТКА ТЕКСТА
     if text:
         send_message(chat_id, "⏳ *Думаю над ответом...*", keyboard_type="none")
         
         if user_state == "chatting_with_teacher":
             mode = "chat"
-            kb = "chat" # Оставляем только кнопку завершения урока
         elif user_state == "waiting_for_explanation":
             mode = "explain"
-            kb = "main" # После объяснения возвращаем в меню
             set_user_state(user_id, "idle")
         elif user_state == "waiting_for_check_hw":
             mode = "check"
-            kb = "main"
             set_user_state(user_id, "idle")
         else:
             mode = "chat"
-            kb = "back" # Просто поболтали, даем кнопку в меню
 
         response_text = ask_gigachat(text, context=get_history(user_id), mode=mode)
-        send_message(chat_id, response_text, keyboard_type=kb)
+        
+        # Везде отправляем только ОДНУ кнопку возврата
+        send_message(chat_id, response_text, keyboard_type="single")
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
 
 def main():
