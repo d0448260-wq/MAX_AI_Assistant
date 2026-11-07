@@ -10,10 +10,10 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С ИСПРАВЛЕННЫМ GIGACHAT ===", flush=True)
+print("=== ЗАПУСК ИИ-УЧИТЕЛЯ С РЕЖИМАМИ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI0ZDktOWNjYi03ODY2LTkwNjAtMWI2ZTFiNTk3N2I4OmY4Y2NjYWE5LTE0ZmItNDBhOS1hNDk0LTFmZjExOWEzZTM0Mg=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
@@ -120,7 +120,7 @@ def update_history(user_id, new_message):
     cursor.execute("SELECT history FROM sessions WHERE id = ?", (session_id,))
     row = cursor.fetchone()
     history = row[0] if row and row[0] else ""
-    history = (history + "\n" + new_message)[-2000:]
+    history = (history + "\n" + new_message)[-4000:]
     cursor.execute("UPDATE sessions SET history = ? WHERE id = ?", (history, session_id))
     conn.commit()
     conn.close()
@@ -152,34 +152,49 @@ def get_gigachat_token():
     }
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
+        if response.status_code != 200:
+            print(f"ОШИБКА АВТОРИЗАЦИИ: {response.text}", flush=True)
         return response.json().get('access_token')
     except Exception as e:
         print(f"Ошибка сети GigaChat: {e}", flush=True)
         return None
 
-def ask_gigachat(prompt, context="", mode="explain"):
+def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
     if not token:
         return "Извините, произошла ошибка авторизации в ИИ."
 
-    # Вернули официальный проверенный адрес
     url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
-    if mode == "explain":
-        system_prompt = "Ты — дружелюбный ИИ-ассистент для школьников 5-11 классов. Объясняй сложные темы простым языком. НИКОГДА не осуждай за незнание. Структура ответа: 1. Простое объяснение. 2. Пример. 3. Три тренировочные задачи. Используй эмодзи и Markdown."
+    base_instruction = (
+        "ТЫ ДОЛЖЕН СТРОГО СОБЛЮДАТЬ ЭТИ ПРАВИЛА ФОРМАТИРОВАНИЯ:\n"
+        "1. НИКОГДА не используй символы $, $$, \\ и LaTeX-разметку (\\frac, \\cdot, \\sqrt и т.д.).\n"
+        "2. Для степеней используй ЮНИКОД-СИМВОЛЫ: x², x³, y⁴ и т.д. (вместо x^2).\n"
+        "3. Для дробей используй ЮНИКОД: ½, ⅓, ¼, ⅔ (вместо 1/2). Если дроби сложные, пиши через слэш (a/b).\n"
+        "4. Для корня используй символ √ (например, √x).\n"
+        "5. Для умножения используй символ × или ·.\n"
+        "6. Для жирного текста используй *звездочки*.\n"
+        "7. Для курсива используй _подчеркивания_.\n"
+        "8. Заголовки пиши просто с новой строки, выделяя их жирным. НЕ используй решетки (#).\n"
+        "9. Разбивай текст на короткие абзацы для удобства чтения.\n"
+    )
+    
+    if mode == "chat":
+        system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель для школьников 5-11 классов. Твоя цель — вести с учеником естественную беседу, отвечать на его вопросы по учебе и просто болтать. Если он просит объяснить тему — объясняй просто. Поддерживай диалог, будь вежливым, мотивирующим и используй эмодзи."
+    elif mode == "explain":
+        system_prompt = base_instruction + "Ты — дружелюбный ИИ-учитель. Объясни тему, которую спросил ученик, простым языком. НИКОГДА не осуждай за незнание. Структура ответа: 1. Простое объяснение. 2. Пример. 3. Три тренировочные задачи."
     elif mode == "solve":
-        system_prompt = "Ты — отличный репетитор. Ученик прислал задачу (распознанную с фото). Реши её по шагам. Объясни каждое действие. Дай итоговый ответ. Используй Markdown."
-    else:
-        system_prompt = "Ты — заботливый учитель. Ученик прислал домашнее задание. Найди ошибки (если есть), объясни ПОЧЕМУ они возникли, как правильно, и какое правило нужно повторить. Пиши мягко. Используй Markdown."
+        system_prompt = base_instruction + "Ты — отличный репетитор. Ученик прислал задачу (распознанную с фото). Реши её по шагам. Объясни каждое действие. Дай итоговый ответ."
+    else: # check
+        system_prompt = base_instruction + "Ты — заботливый учитель. Ученик прислал домашнее задание. Найди ошибки (если есть), объясни ПОЧЕМУ они возникли, как правильно, и какое правило нужно повторить. Пиши мягко."
 
     messages = [{"role": "system", "content": system_prompt}]
     if context:
-        messages.append({"role": "user", "content": f"История: {context}"})
+        messages.append({"role": "user", "content": f"История нашего диалога: {context}"})
     messages.append({"role": "user", "content": prompt})
 
-    # Используем актуальную модель
-    data = {"model": "GigaChat-2", "messages": messages, "temperature": 0.7}
+    data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
 
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
@@ -200,15 +215,16 @@ def get_main_keyboard():
         "payload": {
             "buttons": [
                 [
+                    {"type": "callback", "text": "💬 Поговорить с ИИ", "payload": "btn_chat_teacher"},
+                    {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"}
+                ],
+                [
+                    {"type": "callback", "text": "📸 Решить задачу", "payload": "btn_solve_photo"},
+                    {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"}
+                ],
+                [
                     {"type": "callback", "text": "➕ Новый чат", "payload": "btn_new_chat"},
                     {"type": "callback", "text": "📂 Мои чаты", "payload": "btn_list_chats"}
-                ],
-                [
-                    {"type": "callback", "text": "📚 Объяснить тему", "payload": "btn_explain"},
-                    {"type": "callback", "text": "📸 Решить задачу", "payload": "btn_solve_photo"}
-                ],
-                [
-                    {"type": "callback", "text": "📝 Проверить ДЗ", "payload": "btn_check_hw"}
                 ]
             ]
         }
@@ -218,7 +234,7 @@ def send_message(chat_id, text, show_keyboard=False):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
-    payload = {"text": text}
+    payload = {"text": text, "format": "markdown"}
     
     if show_keyboard:
         payload["attachments"] = [get_main_keyboard()]
@@ -259,7 +275,10 @@ def process_update(update):
             
         payload = callback.get("payload")
         
-        if payload == "btn_new_chat":
+        if payload == "btn_chat_teacher":
+            set_user_state(user_id, "chatting_with_teacher")
+            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.* Задавай любые вопросы, и мы все разберем в формате живого диалога. О чем хочешь поговорить?")
+        elif payload == "btn_new_chat":
             create_new_session(user_id)
             send_message(chat_id, "✨ Создан новый чат! Теперь мы общаемся в чистом контексте. Задай свой вопрос.")
         elif payload == "btn_list_chats":
@@ -273,7 +292,8 @@ def process_update(update):
             else:
                 send_message(chat_id, "❌ Ошибка: чат не найден.")
         elif payload == "btn_explain":
-            send_message(chat_id, "Напиши тему, которую нужно объяснить (например: 'Теорема Пифагора').")
+            set_user_state(user_id, "waiting_for_explanation")
+            send_message(chat_id, "📚 Напиши тему, которую нужно объяснить (например: 'Теорема Пифагора').")
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
             send_message(chat_id, "📸 Отправь мне фото с задачей, и я решу её с подробным объяснением!")
@@ -298,7 +318,8 @@ def process_update(update):
     
     if text == "/start" or text == "/help":
         get_active_session(user_id)
-        welcome = "👋 Привет! Я твой персональный ИИ-ассистент.\n\nНажми «➕ Новый чат», чтобы начать новую тему, или «📂 Мои чаты», чтобы вернуться к старой."
+        set_user_state(user_id, "idle")
+        welcome = "👋 Привет! Я твой личный онлайн-учитель.\n\nВыбери нужный режим на кнопках ниже или просто напиши мне, если хочешь поболтать!"
         send_message(chat_id, welcome, show_keyboard=True)
         return
 
@@ -342,11 +363,23 @@ def process_update(update):
     if text:
         send_message(chat_id, "⏳ Думаю...")
         history = get_history(user_id)
-        mode = "check" if user_state == "waiting_for_check_hw" else "explain"
+        
+        # Выбор режима в зависимости от состояния
+        if user_state == "waiting_for_explanation":
+            mode = "explain"
+        elif user_state == "waiting_for_check_hw":
+            mode = "check"
+        else:
+            # По умолчанию (если нажата кнопка "Поговорить" или просто написан текст)
+            mode = "chat"
+        
         response_text = ask_gigachat(text, context=history, mode=mode)
         send_message(chat_id, response_text, show_keyboard=True)
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
-        set_user_state(user_id, "idle")
+        
+        # Сбрасываем состояние, чтобы следующее сообщение снова пошло в чат (если не нажата кнопка)
+        if user_state in ["waiting_for_explanation", "waiting_for_check_hw"]:
+            set_user_state(user_id, "idle")
 
 def main():
     init_db()
