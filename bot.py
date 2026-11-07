@@ -11,10 +11,10 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С КЭШИРОВАНИЕМ ТОКЕНА ===", flush=True)
+print("=== ЗАПУСК БОТА С НОВЫМ КЛЮЧОМ GIGACHAT ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
+GIGACHAT_AUTH_KEY = "MDFhMWI2ZDUtMjU2Ni03ZGMyLTk4ZDMtOGQwYWQ2YWJkYWJmOjJkNzczNDVmLTM4Y2EtNGEyNC04ZmU3LTk0NjNmOTE4NTZkZg=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
