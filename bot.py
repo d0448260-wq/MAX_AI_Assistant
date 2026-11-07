@@ -11,17 +11,15 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С НОВЫМ КЛЮЧОМ GIGACHAT ===", flush=True)
+print("=== ЗАПУСК БОТА С УЛУЧШЕННЫМ УПРАВЛЕНИЕМ СЕССИЯМИ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI2ZDUtMjU2Ni03ZGMyLTk4ZDMtOGQwYWQ2YWJkYWJmOjJkNzczNDVmLTM4Y2EtNGEyNC04ZmU3LTk0NjNmOTE4NTZkZg=="
+GIGACHAT_AUTH_KEY = "MDFhMWI3NzItZThlZS03ZmEzLTlmMDktZGU0YTBlOWIzZTk5OmI2ZDljZjgwLTM2YTQtNDQ1ZS04OWU3LTQ2MmIxYjQ4YmU2MQ=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
-# --- КЭШ ДЛЯ ТОКЕНА GIGACHAT ---
 cached_gigachat_token = None
 token_expiry_time = 0
-# -------------------------------
 
 def clean_latex(text):
     if not text: return text
@@ -114,8 +112,6 @@ def get_user_state(user_id):
 
 def get_gigachat_token():
     global cached_gigachat_token, token_expiry_time
-    
-    # Если токен есть и он еще не истек (живет 30 минут), возвращаем его
     if cached_gigachat_token and time.time() < token_expiry_time:
         return cached_gigachat_token
 
@@ -128,26 +124,24 @@ def get_gigachat_token():
         'RqUID': str(uuid.uuid4()), 
         'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'
     }
-    
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
         if response.status_code == 200:
             data = response.json()
             cached_gigachat_token = data.get('access_token')
-            # Устанавливаем время жизни токена на 25 минут (чтобы точно не истек)
             token_expiry_time = time.time() + 1500 
-            print("✅ Токен успешно получен и закэширован.", flush=True)
+            print("✅ Токен успешно получен.", flush=True)
             return cached_gigachat_token
         else:
             print(f"❌ ОШИБКА АВТОРИЗАЦИИ GIGACHAT ({response.status_code}): {response.text}", flush=True)
             return None
     except Exception as e:
-        print(f"❌ Ошибка сети при получении токена: {e}", flush=True)
+        print(f"❌ Ошибка сети: {e}", flush=True)
         return None
 
 def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
-    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ. Проверьте логи."
+    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ."
 
     url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
@@ -159,7 +153,7 @@ def ask_gigachat(prompt, context="", mode="chat"):
         "3. Для жирного текста используй *звездочки*.\n"
         "4. Для списков используй маркеры (•) или цифры (1., 2.).\n"
         "5. Делай текст структурированным: абзацы, списки, *выделение главного*.\n"
-        "6. Не пиши сплошным текстом (стеной). Используй эмодзи для акцентов.\n"
+        "6. Не пиши сплошным текстом. Используй эмодзи для акцентов.\n"
     )
     
     if mode == "chat": system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель. Веди естественную беседу, объясняй понятно, подбадривай."
@@ -177,7 +171,7 @@ def ask_gigachat(prompt, context="", mode="chat"):
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
         if response.status_code != 200:
             print(f"❌ ОШИБКА API GIGACHAT ({response.status_code}): {response.text}", flush=True)
-            return "⚠️ Ошибка ИИ при генерации. Проверьте логи."
+            return "⚠️ Ошибка ИИ при генерации."
             
         return clean_latex(response.json()['choices'][0]['message']['content'])
     except Exception as e:
@@ -211,6 +205,16 @@ def get_back_keyboard():
         }
     }
 
+def get_chat_keyboard():
+    return {
+        "type": "inline_keyboard",
+        "payload": {
+            "buttons": [
+                [{"type": "callback", "text": "🛑 Завершить урок и выйти в меню", "payload": "btn_main_menu"}]
+            ]
+        }
+    }
+
 def send_message(chat_id, text, keyboard_type="main"):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
@@ -221,6 +225,8 @@ def send_message(chat_id, text, keyboard_type="main"):
         payload["attachments"] = [get_main_keyboard()]
     elif keyboard_type == "back":
         payload["attachments"] = [get_back_keyboard()]
+    elif keyboard_type == "chat":
+        payload["attachments"] = [get_chat_keyboard()]
     
     try:
         response = requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
@@ -264,19 +270,19 @@ def process_update(update):
         
         if payload == "btn_main_menu":
             set_user_state(user_id, "idle")
-            send_message(chat_id, "🏠 *Главное меню.* Выбери, чем займемся?", keyboard_type="main")
+            send_message(chat_id, "🏠 *Главное меню.* Чем еще я могу помочь?", keyboard_type="main")
         elif payload == "btn_chat_teacher":
             set_user_state(user_id, "chatting_with_teacher")
-            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы, и мы все разберем в формате живого диалога. О чем хочешь поговорить?", keyboard_type="back")
+            send_message(chat_id, "💬 *Отлично! Я готов обсудить с тобой учебу.*\n\nЗадавай любые вопросы, я буду отвечать. Чтобы выйти, нажми кнопку внизу.", keyboard_type="chat")
         elif payload == "btn_explain":
             set_user_state(user_id, "waiting_for_explanation")
-            send_message(chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_ или _Закон Ома_)", keyboard_type="back")
+            send_message(chat_id, "📚 *Напиши тему*, которую нужно объяснить (например: _Теорема Пифагора_).", keyboard_type="back")
         elif payload == "btn_solve_photo":
             set_user_state(user_id, "waiting_for_solve_photo")
-            send_message(chat_id, "📸 *Отправь мне фото с задачей*, и я решу её с подробным объяснением по шагам!", keyboard_type="back")
+            send_message(chat_id, "📸 *Отправь мне фото с задачей*, и я решу её по шагам!", keyboard_type="back")
         elif payload == "btn_check_hw":
             set_user_state(user_id, "waiting_for_check_hw")
-            send_message(chat_id, "📝 *Отправь фото или текст своего решения*, и я проверю его без осуждения.", keyboard_type="back")
+            send_message(chat_id, "📝 *Отправь фото или текст решения*, и я проверю его.", keyboard_type="back")
         return
 
     if update_type != "message_created": return
@@ -294,7 +300,6 @@ def process_update(update):
         set_user_state(user_id, "idle")
         welcome = (
             "👋 *Привет! Я твой персональный ИИ-учитель.*\n\n"
-            "Я помогу тебе разобраться в сложных темах, проверю домашку или решу задачу по фото.\n\n"
             "👇 *Выбери действие на кнопках ниже* или просто напиши мне свой вопрос в чат!"
         )
         send_message(chat_id, welcome, keyboard_type="main")
@@ -317,19 +322,37 @@ def process_update(update):
             send_message(chat_id, "✅ *Текст распознан. Отправляю ИИ...*", keyboard_type="none")
             mode = "check" if user_state == "waiting_for_check_hw" else "solve"
             response_text = ask_gigachat(f"Задача:\n\n{extracted_text}", context=get_history(user_id), mode=mode)
-            send_message(chat_id, response_text, keyboard_type="main")
+            
+            # Если мы были в режиме чата, оставляем кнопку выхода из чата, иначе даем главное меню
+            kb = "chat" if user_state == "chatting_with_teacher" else "main"
+            send_message(chat_id, response_text, keyboard_type=kb)
+            
             update_history(user_id, "Фото решено.")
-            set_user_state(user_id, "idle")
+            if user_state != "chatting_with_teacher": set_user_state(user_id, "idle")
         except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="main")
         return
 
     if text:
         send_message(chat_id, "⏳ *Думаю над ответом...*", keyboard_type="none")
-        mode = "explain" if user_state == "waiting_for_explanation" else ("check" if user_state == "waiting_for_check_hw" else "chat")
+        
+        if user_state == "chatting_with_teacher":
+            mode = "chat"
+            kb = "chat" # Оставляем только кнопку завершения урока
+        elif user_state == "waiting_for_explanation":
+            mode = "explain"
+            kb = "main" # После объяснения возвращаем в меню
+            set_user_state(user_id, "idle")
+        elif user_state == "waiting_for_check_hw":
+            mode = "check"
+            kb = "main"
+            set_user_state(user_id, "idle")
+        else:
+            mode = "chat"
+            kb = "back" # Просто поболтали, даем кнопку в меню
+
         response_text = ask_gigachat(text, context=get_history(user_id), mode=mode)
-        send_message(chat_id, response_text, keyboard_type="main")
+        send_message(chat_id, response_text, keyboard_type=kb)
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
-        if user_state in ["waiting_for_explanation", "waiting_for_check_hw"]: set_user_state(user_id, "idle")
 
 def main():
     init_db()
