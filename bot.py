@@ -10,10 +10,10 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК ИСПРАВЛЕННОЙ ВЕРСИИ С КНОПКАМИ ===", flush=True)
+print("=== ЗАПУСК БОТА С ИСПРАВЛЕННЫМ GIGACHAT ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OmI1ZGIwYzY3LTZlZTgtNGQzNC05NjA5LTJhNmY3ZjYyMDU4ZA=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
@@ -26,7 +26,6 @@ def init_db():
                         current_session_id INTEGER,
                         state TEXT
                       )''')
-    # На случай, если база уже создана без chat_id
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN chat_id INTEGER")
     except sqlite3.OperationalError:
@@ -153,7 +152,6 @@ def get_gigachat_token():
     }
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
-        print(f"DEBUG GIGACHAT AUTH: {response.status_code}", flush=True)
         return response.json().get('access_token')
     except Exception as e:
         print(f"Ошибка сети GigaChat: {e}", flush=True)
@@ -162,9 +160,10 @@ def get_gigachat_token():
 def ask_gigachat(prompt, context="", mode="explain"):
     token = get_gigachat_token()
     if not token:
-        return "Извините, произошла ошибка авторизации в ИИ. Проверьте логи."
+        return "Извините, произошла ошибка авторизации в ИИ."
 
-    url = "https://api.giga.chat/v1/chat/completions"
+    # Вернули официальный проверенный адрес
+    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
     if mode == "explain":
@@ -179,14 +178,20 @@ def ask_gigachat(prompt, context="", mode="explain"):
         messages.append({"role": "user", "content": f"История: {context}"})
     messages.append({"role": "user", "content": prompt})
 
-    data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
+    # Используем актуальную модель
+    data = {"model": "GigaChat-2", "messages": messages, "temperature": 0.7}
 
     try:
         response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
-        print(f"DEBUG GIGACHAT API: {response.status_code}", flush=True)
-        return response.json()['choices'][0]['message']['content']
+        res_json = response.json()
+        
+        if response.status_code != 200:
+            print(f"ОШИБКА GIGACHAT API ({response.status_code}): {res_json}", flush=True)
+            return f"Ошибка ИИ: {res_json.get('message', 'Неизвестная ошибка')}"
+            
+        return res_json['choices'][0]['message']['content']
     except Exception as e:
-        print(f"Ошибка запроса к GigaChat: {e}", flush=True)
+        print(f"Ошибка парсинга GigaChat: {e}", flush=True)
         return "Произошла ошибка при генерации ответа."
 
 def get_main_keyboard():
@@ -209,16 +214,14 @@ def get_main_keyboard():
         }
     }
 
-def send_message(chat_id, text, attachments=None):
+def send_message(chat_id, text, show_keyboard=False):
     url = f"{BASE_URL}/messages"
     headers = {"Authorization": MAX_TOKEN}
     params = {"chat_id": chat_id}
     payload = {"text": text}
     
-    if not attachments:
+    if show_keyboard:
         payload["attachments"] = [get_main_keyboard()]
-    else:
-        payload["attachments"] = attachments
 
     try:
         response = requests.post(url, headers=headers, params=params, json=payload, timeout=10, verify=False)
@@ -248,11 +251,8 @@ def process_update(update):
     
     if update_type == "message_callback":
         callback = update.get("callback", {})
-        print(f"DEBUG CALLBACK: {callback}", flush=True) # Смотрим, как MAX присылает кнопки
-        
         user_id = callback.get("user", {}).get("user_id")
         
-        # Берем chat_id из базы, если его нет в коллбеке
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id")
         if not chat_id:
             chat_id = get_user_chat(user_id)
@@ -294,13 +294,12 @@ def process_update(update):
     if not chat_id or not user_id:
         return
     
-    # СОХРАНЯЕМ CHAT_ID В БАЗУ ПРИ КАЖДОМ СООБЩЕНИИ
     save_user_chat(user_id, chat_id)
     
     if text == "/start" or text == "/help":
         get_active_session(user_id)
         welcome = "👋 Привет! Я твой персональный ИИ-ассистент.\n\nНажми «➕ Новый чат», чтобы начать новую тему, или «📂 Мои чаты», чтобы вернуться к старой."
-        send_message(chat_id, welcome)
+        send_message(chat_id, welcome, show_keyboard=True)
         return
 
     user_state = get_user_state(user_id)
@@ -332,7 +331,7 @@ def process_update(update):
                 prompt = f"Реши эту задачу по шагам:\n\n{extracted_text}"
             
             response_text = ask_gigachat(prompt, context=get_history(user_id), mode=mode)
-            send_message(chat_id, response_text)
+            send_message(chat_id, response_text, show_keyboard=True)
             update_history(user_id, f"Ученик отправил фото. Ассистент ответил.")
             set_user_state(user_id, "idle")
         except Exception as e:
@@ -345,7 +344,7 @@ def process_update(update):
         history = get_history(user_id)
         mode = "check" if user_state == "waiting_for_check_hw" else "explain"
         response_text = ask_gigachat(text, context=history, mode=mode)
-        send_message(chat_id, response_text)
+        send_message(chat_id, response_text, show_keyboard=True)
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
         set_user_state(user_id, "idle")
 
