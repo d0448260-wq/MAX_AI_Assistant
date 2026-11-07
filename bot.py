@@ -11,10 +11,11 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК БОТА С ОДНОЙ КНОПКОЙ ВОЗВРАТА ===", flush=True)
+print("=== ЗАПУСК БОТА С НОВЫМ КЛЮЧОМ ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI2ZDUtMjU2Ni03ZGMyLTk4ZDMtOGQwYWQ2YWJkYWJmOjJkNzczNDVmLTM4Y2EtNGEyNC04ZmU3LTk0NjNmOTE4NTZkZg=="
+# ВСТАВЛЕН ВАШ НОВЫЙ КЛЮЧ
+GIGACHAT_AUTH_KEY = "MDFhMWI3NzItZThlZS03ZmEzLTlmMDktZGU0YTBlOWIzZTk5OmI2ZDljZjgwLTM2YTQtNDQ1ZS04OWU3LTQ2MmIxYjQ4YmU2MQ=="
 
 BASE_URL = "https://platform-api2.max.ru"
 
@@ -125,7 +126,8 @@ def get_gigachat_token():
         'Authorization': f'Basic {GIGACHAT_AUTH_KEY}'
     }
     try:
-        response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
+        # Увеличили timeout до 30 секунд
+        response = requests.post(url, headers=headers, data=payload, verify=False, timeout=30)
         if response.status_code == 200:
             data = response.json()
             cached_gigachat_token = data.get('access_token')
@@ -141,9 +143,9 @@ def get_gigachat_token():
 
 def ask_gigachat(prompt, context="", mode="chat"):
     token = get_gigachat_token()
-    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ."
+    if not token: return "⚠️ Извините, произошла ошибка авторизации в ИИ. Проверьте логи."
 
-    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+    url = "https://api.giga.chat/v1/chat/completions"
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     
     base_instruction = (
@@ -165,10 +167,10 @@ def ask_gigachat(prompt, context="", mode="chat"):
     if context: messages.append({"role": "user", "content": f"История: {context}"})
     messages.append({"role": "user", "content": prompt})
 
-    data = {"model": "GigaChat", "messages": messages, "temperature": 0.7}
+    data = {"model": "GigaChat-2", "messages": messages, "temperature": 0.7}
     
     try:
-        response = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
+        response = requests.post(url, headers=headers, json=data, verify=False, timeout=40)
         if response.status_code != 200:
             print(f"❌ ОШИБКА API GIGACHAT ({response.status_code}): {response.text}", flush=True)
             return "⚠️ Ошибка ИИ при генерации."
@@ -178,10 +180,7 @@ def ask_gigachat(prompt, context="", mode="chat"):
         print(f"❌ Ошибка парсинга: {e}", flush=True)
         return "⚠️ Ошибка при генерации ответа."
 
-# --- КЛАВИАТУРЫ ---
-
 def get_main_keyboard():
-    """4 кнопки - только для главного меню"""
     return {
         "type": "inline_keyboard",
         "payload": {
@@ -199,7 +198,6 @@ def get_main_keyboard():
     }
 
 def get_single_back_keyboard():
-    """1 кнопка - для всех остальных случаев"""
     return {
         "type": "inline_keyboard",
         "payload": {
@@ -300,7 +298,6 @@ def process_update(update):
     user_state = get_user_state(user_id)
     image_url = next((att.get("payload", {}).get("url") for att in attachments if att.get("type") == "image"), None)
 
-    # ОБРАБОТКА ФОТО
     if image_url:
         send_message(chat_id, "📸 *Фото получено! Распознаю текст...*", keyboard_type="none")
         try:
@@ -322,7 +319,6 @@ def process_update(update):
         except Exception: send_message(chat_id, "⚠️ Ошибка обработки фото.", keyboard_type="single")
         return
 
-    # ОБРАБОТКА ТЕКСТА
     if text:
         send_message(chat_id, "⏳ *Думаю над ответом...*", keyboard_type="none")
         
@@ -338,8 +334,6 @@ def process_update(update):
             mode = "chat"
 
         response_text = ask_gigachat(text, context=get_history(user_id), mode=mode)
-        
-        # Везде отправляем только ОДНУ кнопку возврата
         send_message(chat_id, response_text, keyboard_type="single")
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
 
