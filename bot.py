@@ -12,7 +12,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК ПОЛНОГО КОДА БОТА ===", flush=True)
+print("=== ЗАПУСК ПОЛНОГО КОДА БОТА (ФИКС 422) ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
 GIGACHAT_AUTH_KEY = "MDFhMWI3ZjMtYTM3Mi03NmIwLWJkYjktNjM1YWI1YTY0OWYzOjBlYTFjNjk0LTQzN2UtNGQ3MC1iYTZiLWU0YWQyZWNmMWI4ZA=="
@@ -199,13 +199,17 @@ def ask_gigachat(prompt, context="", mode="chat"):
     elif mode == "solve": system_prompt = base_instruction + " Ты — репетитор. Реши задачу по шагам."
     else: system_prompt = base_instruction + " Ты — учитель. Найди ошибки и объясни их."
 
-    messages = [{"role": "system", "content": system_prompt}]
-    if context: messages.append({"role": "system", "content": f"Контекст: {context}"})
-    messages.append({"role": "user", "content": prompt})
+    # ИСПРАВЛЕНИЕ 422: Контекст добавляем в ту же системную инструкцию, а не отдельным сообщением
+    if context:
+        system_prompt += f"\n\nКонтекст предыдущего диалога:\n{context}"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt}
+    ]
 
     data = {"model": "GigaChat", "messages": messages, "temperature": 0.6}
     
-    # Делаем до 3 попыток
     for attempt in range(3):
         try:
             response = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
