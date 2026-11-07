@@ -4,18 +4,71 @@ import sqlite3
 import uuid
 import io
 import os
+import re  # Добавили библиотеку для регулярных выражений
 from PIL import Image
 import pytesseract
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print("=== ЗАПУСК ИИ-УЧИТЕЛЯ С РЕЖИМАМИ ===", flush=True)
+print("=== ЗАПУСК ИИ-УЧИТЕЛЯ С АВТООЧИСТКОЙ LATEX ===", flush=True)
 
 MAX_TOKEN = "f9LHodD0cOLWL39U48Z8RsC2X4HIL1mYcfhxK4qmPXNCyP5nqUn6F7Pbi1QRJ_VdTv_SEobZNS7Y-t2g6NV-"
-GIGACHAT_AUTH_KEY = "MDFhMWI2YTMtMzBmOS03ODdlLWI2MTYtMzk2NTE5YTQyODY5OjA2MmFlNDJlLTBkM2MtNDBkOC05NjU0LWNiYWQyMTVmYjE4Mg=="
+GIGACHAT_AUTH_KEY = "MDFhMWIxMzEtYjNiZi03N2EwLThmZTUtZjMzMWMwOWYwNzI5OjBiZTY4Njk4LTc4ZWYtNDllMS1hYzI3LWUwZGFmOTQxNGQ0NA=="
 
 BASE_URL = "https://platform-api2.max.ru"
+
+def clean_latex(text):
+    """Убирает LaTeX-разметку и заменяет её на красивые символы"""
+    if not text:
+        return text
+    
+    # Убираем знаки доллара (и двойные, и одинарные)
+    text = text.replace('$$', '')
+    text = text.replace('$', '')
+    
+    # Заменяем популярные команды на символы Юникода
+    text = text.replace('\\times', '×')
+    text = text.replace('\\cdot', '·')
+    text = text.replace('\\approx', '≈')
+    text = text.replace('\\le', '≤')
+    text = text.replace('\\ge', '≥')
+    text = text.replace('\\neq', '≠')
+    text = text.replace('\\pm', '±')
+    
+    # Греческие буквы
+    text = text.replace('\\alpha', 'α')
+    text = text.replace('\\beta', 'β')
+    text = text.replace('\\gamma', 'γ')
+    text = text.replace('\\theta', 'θ')
+    text = text.replace('\\pi', 'π')
+    
+    # Тригонометрия
+    text = text.replace('\\sin', 'sin')
+    text = text.replace('\\cos', 'cos')
+    text = text.replace('\\tan', 'tan')
+    
+    # Дроби: \frac{A}{B} -> (A) / (B)
+    text = re.sub(r'\\frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1) / (\2)', text)
+    
+    # Текстовые блоки: \text{...} -> ...
+    text = re.sub(r'\\text\{([^{}]+)\}', r'\1', text)
+    
+    # Степени
+    text = text.replace('^{2}', '²')
+    text = text.replace('^{3}', '³')
+    text = re.sub(r'\^\{([^{}]+)\}', r'^(\1)', text) 
+    
+    # Индексы
+    text = re.sub(r'_\{([^{}]+)\}', r'_\1', text)
+    
+    # Убираем лишние слэши перед буквами (если остались)
+    text = text.replace('\\', '')
+    
+    # Убираем странные запятые с пробелами (например, "1000 , \text{кг}")
+    text = text.replace(' , ', ' ')
+    
+    return text
 
 def init_db():
     conn = sqlite3.connect('school_assistant.db')
@@ -152,8 +205,6 @@ def get_gigachat_token():
     }
     try:
         response = requests.post(url, headers=headers, data=payload, verify=False, timeout=10)
-        if response.status_code != 200:
-            print(f"ОШИБКА АВТОРИЗАЦИИ: {response.text}", flush=True)
         return response.json().get('access_token')
     except Exception as e:
         print(f"Ошибка сети GigaChat: {e}", flush=True)
@@ -181,7 +232,7 @@ def ask_gigachat(prompt, context="", mode="chat"):
     )
     
     if mode == "chat":
-        system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель для школьников 5-11 классов. Твоя цель — вести с учеником естественную беседу, отвечать на его вопросы по учебе и просто болтать. Если он просит объяснить тему — объясняй просто. Поддерживай диалог, будь вежливым, мотивирующим и используй эмодзи."
+        system_prompt = base_instruction + "Ты — дружелюбный онлайн-учитель для школьников 5-11 классов. Твоя цель — вести с учеником естественную беседу, отвечать на его вопросы по учебе. Поддерживай диалог, будь вежливым, мотивирующим и используй эмодзи."
     elif mode == "explain":
         system_prompt = base_instruction + "Ты — дружелюбный ИИ-учитель. Объясни тему, которую спросил ученик, простым языком. НИКОГДА не осуждай за незнание. Структура ответа: 1. Простое объяснение. 2. Пример. 3. Три тренировочные задачи."
     elif mode == "solve":
@@ -201,10 +252,13 @@ def ask_gigachat(prompt, context="", mode="chat"):
         res_json = response.json()
         
         if response.status_code != 200:
-            print(f"ОШИБКА GIGACHAT API ({response.status_code}): {res_json}", flush=True)
             return f"Ошибка ИИ: {res_json.get('message', 'Неизвестная ошибка')}"
             
-        return res_json['choices'][0]['message']['content']
+        raw_text = res_json['choices'][0]['message']['content']
+        # ОЧИЩАЕМ ТЕКСТ ОТ LATEX ПЕРЕД ОТПРАВКОЙ
+        clean_text = clean_latex(raw_text)
+        
+        return clean_text
     except Exception as e:
         print(f"Ошибка парсинга GigaChat: {e}", flush=True)
         return "Произошла ошибка при генерации ответа."
@@ -268,7 +322,6 @@ def process_update(update):
     if update_type == "message_callback":
         callback = update.get("callback", {})
         user_id = callback.get("user", {}).get("user_id")
-        
         chat_id = callback.get("message", {}).get("recipient", {}).get("chat_id")
         if not chat_id:
             chat_id = get_user_chat(user_id)
@@ -364,20 +417,17 @@ def process_update(update):
         send_message(chat_id, "⏳ Думаю...")
         history = get_history(user_id)
         
-        # Выбор режима в зависимости от состояния
         if user_state == "waiting_for_explanation":
             mode = "explain"
         elif user_state == "waiting_for_check_hw":
             mode = "check"
         else:
-            # По умолчанию (если нажата кнопка "Поговорить" или просто написан текст)
             mode = "chat"
         
         response_text = ask_gigachat(text, context=history, mode=mode)
         send_message(chat_id, response_text, show_keyboard=True)
         update_history(user_id, f"Ученик: {text}\nАссистент: {response_text}")
         
-        # Сбрасываем состояние, чтобы следующее сообщение снова пошло в чат (если не нажата кнопка)
         if user_state in ["waiting_for_explanation", "waiting_for_check_hw"]:
             set_user_state(user_id, "idle")
 
